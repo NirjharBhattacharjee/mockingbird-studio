@@ -1,0 +1,14 @@
+{
+  "name": "mockingbird-studio",
+  "owner": {
+    "name": "Nirjhar Bhattacharjee",
+    "url": "https://github.com/NirjharBhattacharjee"
+  },
+  "plugins": [
+    {
+      "name": "mockingbird-studio",
+      "source": "./",
+      "description": "Edit your videos into shorts and long-form YouTube videos, rendered on your Mac by mockingbird."
+    }
+  ]
+}
