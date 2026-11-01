@@ -64,13 +64,16 @@ after.
    starts at the cue where its first sentence starts. YouTube needs the first
    at 00:00, at least three, and each at least 10 seconds. Name each one for
    what the viewer gets, not "Part 2".
-9. **Graphics and sound.** Per **motion-graphics**: a short section title at
-   each chapter start if the video changes topic sharply, b-roll where the
-   speech names something visual. No music under explanation; music only on
-   an intro, an outro or a montage, ducked.
-10. **Render.** One `render` call. A long video takes a while (about a quarter
-    of its length on an M3); in Claude Code, raise `MCP_TOOL_TIMEOUT` if it's
-    cut off.
+9. **Render.** One `render` call, with b-roll where the speech names
+   something visual. No music under explanation; music only on an intro, an
+   outro or a montage, ducked. A long video takes a while (about a quarter of
+   its length on an M3); in Claude Code, raise `MCP_TOOL_TIMEOUT` if it's cut
+   off.
+10. **Animate, sparingly.** Per **motion-graphics**: a section card that
+    slides in at each chapter start where the topic changes sharply, a lower
+    third the first time someone's named, a highlight box that draws on round
+    what the speaker points at on screen. Run `motion` over the render; for a
+    long video, try the script with `duration` on a short stretch first.
 11. **Titles and thumbnails.** Three titles, each a different angle on the same
     true promise, and three thumbnail stills from `frames` (a clear face with
     an expression, the result or object itself, and one without a face).

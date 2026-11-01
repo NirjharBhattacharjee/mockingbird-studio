@@ -11,8 +11,8 @@ render, and have the result checked before calling it done. mockingbird's MCP
 tools do the mechanics; this skill and the ones it names hold the judgement.
 
 The other skills: **hooks** (the first seconds), **retention-editing** (cutting
-pauses, punch-ins, pace), **captions**, **motion-graphics** (titles, b-roll,
-sound), **style-match** (copy the pace of a video that already did well). Read
+pauses, punch-ins, pace), **captions**, **motion-graphics** (animated titles,
+captions, zooms and sound), **style-match** (copy the pace of a video that already did well). Read
 each when you reach its step. For a full-length 16:9 edit, use **long-form**
 instead.
 
@@ -21,7 +21,7 @@ instead.
 - Call `status`. If mockingbird's tools are missing, the user needs mockingbird
   installed (`brew install nirjharbhattacharjee/mockingbird/mockingbird` or the curl
   installer in its README) and a version whose `render` takes `focus`, `split`,
-  `texts`, `inserts` and `audio`.
+  `texts`, `inserts` and `audio`, and the `motion` tool (Apple silicon).
 - Use absolute paths. Renders land beside the source as `<name>-short-N.mp4`
   unless you pass `out`; mockingbird never overwrites a file.
 - If the user gave a reference video they want to match, run **style-match**
@@ -50,11 +50,14 @@ instead.
    Give each clip a `focus` on the speaker's face, or use `split` for a screen
    recording with a webcam (screen on top, webcam below, `captionsY: 0.5`).
    Punch in with `zoom` per **retention-editing**.
-6. **Graphics and sound.** Per **motion-graphics**: a hook title over the
-   first two to three seconds if the opening line needs one, b-roll only where
-   the speech names something the viewer would want to see, music low and
-   ducked, a sound effect only on a beat that matters. All optional.
-7. **Render.** One `render` call per short, `vertical: true` (or `split`).
+6. **Render the cut.** One `render` call per short, `vertical: true` (or
+   `split`), with b-roll only where the speech names something worth seeing,
+   music low and ducked, and a sound effect only on a beat that matters. For
+   a plain captioned short, pass the captions here and stop. For anything
+   that moves, leave captions and titles out and go on.
+7. **Animate.** Per **motion-graphics**: a script from its template (hook
+   card, popping word captions, push-in, progress bar), run with `motion`
+   over the cut and the SRT from step 4.
 8. **Review.** Hand the file to the **reviewer** agent with what the short
    is meant to be. Fix what it finds and render again (a new file each time);
    don't argue with a failed check.
@@ -77,7 +80,8 @@ them failing.
 - The face, or the thing being talked about, fills the frame; nothing
   important cropped by the 9:16 cut.
 - −14 LUFS (mockingbird does this), speech always clearly over the music.
-- One caption style, one text style, the same position throughout.
+- One caption style, one accent colour, one font, the same position throughout.
+- Everything that moves eases in and out; nothing just appears or vanishes.
 - Nothing on screen the viewer has to read in under a second.
 
 ## Export specs

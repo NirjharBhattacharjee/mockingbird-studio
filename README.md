@@ -17,7 +17,9 @@ The rendering happens on your Mac, with
 
 **Shorts**: 1080x1920 MP4s, 15–60 seconds each, with word-by-word captions
 (the spoken word in yellow), the speaker kept in frame, punch-in zooms over
-jump cuts, and optional hook title, b-roll, ducked music and sound effects.
+jump cuts, and optional b-roll, ducked music and sound effects. Anything
+that moves is written as code: titles that spring in, captions that pop, zooms,
+lower thirds, arrows that draw themselves on.
 A screen recording with a webcam becomes screen on top, face below.
 
 **Long-form**: the whole video with dead air, retakes and tangents cut, a
@@ -58,7 +60,7 @@ Claude doesn't see every tool twice.
 | `hooks` | The first seconds of a short, the first minute of a long video |
 | `retention-editing` | Cutting pauses and retakes, where to cut, punch-ins, pace |
 | `captions` | Word-by-word captions or an SRT, spelled right, placed clear of faces and buttons |
-| `motion-graphics` | Titles, b-roll, zooms, music, sound effects, and when to leave them out |
+| `motion-graphics` | Animation as code for mockingbird's `motion` tool, with a tested template, and when to leave it out |
 | `style-match` | Measure a video that worked and match its pace |
 | `reviewer` agent | Checks every render: size, loudness, black frames, opening, captions, framing |
 
@@ -80,7 +82,7 @@ else you show Claude. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 ## Limits
 
 - macOS only, because mockingbird is.
-- Captions and titles are stills: no bouncing words, no keyframed motion.
+- Motion graphics need a Mac with Apple silicon.
 - It edits what you recorded. It can move your best line to the front; it
   can't add a point you didn't make.
 - Music, b-roll and sound effects are yours to supply, with the rights to

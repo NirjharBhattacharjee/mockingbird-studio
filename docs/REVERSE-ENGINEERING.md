@@ -32,7 +32,7 @@ the word-by-word caption style most short-form tools copy.
 | Outline | 20 px black stroke | black outline |
 | Position | 350 px from the bottom of 1920 (about 0.82 of the height) | `captionsY` 0.7 by default, clear of the app buttons and caption that cover the bottom of the screen |
 | Case | upper case | `upper: true` is an option, off by default |
-| Entrance | spring pop: scale 0.8 → 1 and up 50 px | none: mockingbird draws stills, not animation. Add a renderer only if this turns out to matter |
+| Entrance | spring pop: scale 0.8 → 1 and up 50 px | the same spring in the motion-graphics template (0.85 → 1, `damping: 14`, a little calmer), drawn by `motion` |
 
 ## auto-editor
 
@@ -47,9 +47,9 @@ standard tool for cutting silence out of long recordings.
 
 ## What it told us not to build
 
-Both tools draw captions and cut silence, and neither needs a browser for it.
-Remotion renders with Chromium because its captions animate. Everything else
-in its template (timing, size, outline, position) is a still image per caption
-page, which is what mockingbird already draws with Core Text. So the plugin has
-no Remotion or Motion Canvas dependency; the one thing that costs is the spring
-pop on each caption page.
+Remotion renders with Chromium because its captions animate. Nothing in its
+template needs a browser: the spring pop (scale 0.8 → 1, up 50 px) is a
+formula, and mockingbird's `motion` tool draws it with Core Graphics. The
+motion-graphics template uses the same spring (`m.spring`, Remotion's default
+stiffness 100 and damping 10) and the same scale range, and neither the plugin
+nor mockingbird depends on Remotion.

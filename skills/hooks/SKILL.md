@@ -40,7 +40,8 @@ in one line.
   `render` keeps clips in the order you list them. The cold-open line must
   not repeat word for word when the video reaches it; trim it there or start
   just after it.
-- **The speech has no hook at all**: a hook title. `texts` over the first two
+- **The speech has no hook at all**: a hook title, ideally a card that
+  springs in (**motion-graphics** template), or `render`'s `texts` over the first two
   to three seconds, six words or fewer, at `y` 0.2 in a short. State the
   promise the video keeps, not clickbait it doesn't.
 - **The first frame is static** (a slide, someone settling in): start a beat
