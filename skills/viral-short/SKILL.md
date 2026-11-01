@@ -19,9 +19,12 @@ instead.
 ## Before you start
 
 - Call `status`. If mockingbird's tools are missing, the user needs mockingbird
-  installed (`brew install nirjharbhattacharjee/mockingbird/mockingbird` or the curl
-  installer in its README) and a version whose `render` takes `focus`, `split`,
-  `texts`, `inserts` and `audio`, and the `motion` tool (Apple silicon).
+  v0.3.0 or newer (`brew install nirjharbhattacharjee/mockingbird/mockingbird`,
+  then `mockingbird models pull`). If `render` doesn't list `focus`, `split`,
+  `texts`, `inserts` and `audio`, mockingbird is older: tell the user to
+  update (`brew upgrade mockingbird`) and stop. The `motion` tool is needed
+  only for step 7; without it (an older mockingbird, or an Intel Mac), make
+  a plain captioned short and say why it isn't animated.
 - Use absolute paths. Renders land beside the source as `<name>-short-N.mp4`
   unless you pass `out`; mockingbird never overwrites a file.
 - If the user gave a reference video they want to match, run **style-match**
@@ -79,14 +82,16 @@ them failing.
   area (below).
 - The face, or the thing being talked about, fills the frame; nothing
   important cropped by the 9:16 cut.
-- −14 LUFS (mockingbird does this), speech always clearly over the music.
+- About −14 LUFS, speech always clearly over the music. mockingbird aims for
+  −14; a very quiet recording can land near −15 (mockingbird#127), which the
+  reviewer reports.
 - One caption style, one accent colour, one font, the same position throughout.
 - Everything that moves eases in and out; nothing just appears or vanishes.
 - Nothing on screen the viewer has to read in under a second.
 
 ## Export specs
 
-`render` makes H.264 MP4 at 1080x1920 with the sound at −14 LUFS, which
+`render` makes H.264 MP4 at 1080x1920 with the sound at about −14 LUFS, which
 Shorts, Reels and TikTok all take as is.
 
 | | YouTube Shorts | Instagram Reels | TikTok |

@@ -21,7 +21,10 @@ The scripts are in this skill's `scripts/` folder.
   Defaults: quieter than −35 dB for at least 0.25 s. In a noisy room, use −30.
 - `clips.sh <from> <to> [min pause] [margin]` reads `pauses.sh`'s output and
   prints `render`'s `clips` as JSON: everything between pauses of at least
-  `min` seconds, keeping `margin` seconds into each pause.
+  `min` seconds, keeping `margin` seconds into each pause. A stretch too short
+  to stand alone is joined to the next, pause and all, so no word is lost.
+  `pauses.sh` exits non-zero if ffmpeg can't read the sound; don't run
+  `clips.sh` on its output then.
 - `transcribe` with `words: true` gives each word's start and end. Keep it to
   a few minutes per call.
 
@@ -39,8 +42,8 @@ you what's being said where.
 | A visual change | every few seconds (a cut, a zoom, a caption page, b-roll) | between face and screen, every 20–60 s or at each new point |
 
 ```sh
-scripts=<this skill's folder>/scripts
-$scripts/pauses.sh talk.mp4 120 165 | $scripts/clips.sh 120 165 0.3 0.1
+scripts="<this skill's folder>/scripts"
+"$scripts/pauses.sh" talk.mp4 120 165 | "$scripts/clips.sh" 120 165 0.3 0.1
 ```
 
 ## What to cut

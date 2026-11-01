@@ -30,12 +30,18 @@ Both come out at −14 LUFS, the loudness the platforms play at.
 
 ## Install
 
-You need macOS and mockingbird, with the render options from
-[mockingbird#125](https://github.com/NirjharBhattacharjee/mockingbird/issues/125):
+You need a Mac with Apple silicon and mockingbird v0.3.0 or newer, which has
+`render`'s framing, b-roll and sound options and the `motion` tool.
+mockingbird's Homebrew formula is for Apple silicon only:
 
 ```sh
 brew install nirjharbhattacharjee/mockingbird/mockingbird
+mockingbird models pull   # the speech model, once; the only download
 ```
+
+Its curl installer (in [mockingbird's README](https://github.com/NirjharBhattacharjee/mockingbird#install))
+also runs on an Intel Mac. Cutting, captions and sound work there; `motion`
+doesn't.
 
 Then in Claude Code:
 
@@ -82,7 +88,7 @@ else you show Claude. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 ## Limits
 
 - macOS only, because mockingbird is.
-- Motion graphics need a Mac with Apple silicon.
+- Motion graphics need Apple silicon, as does mockingbird's Homebrew formula.
 - It edits what you recorded. It can move your best line to the front; it
   can't add a point you didn't make.
 - Music, b-roll and sound effects are yours to supply, with the rights to

@@ -32,8 +32,8 @@ after.
 3. **Cut the dead air.** Over the whole file:
 
    ```sh
-   scripts=<retention-editing skill folder>/scripts
-   $scripts/pauses.sh video.mp4 | $scripts/clips.sh 0 <length> 0.5 0.2
+   scripts="<retention-editing skill folder>/scripts"
+   "$scripts/pauses.sh" video.mp4 | "$scripts/clips.sh" 0 <length> 0.5 0.2
    ```
 
    That keeps everything but pauses over half a second, with 0.2 s either side
@@ -94,4 +94,6 @@ after.
 - Chapters valid and named for the viewer.
 - The `.srt` spelled right; names checked against `dictionary_list`.
 - Music never under explanation; speech always clearly on top.
-- −14 LUFS (mockingbird does this).
+- −14 LUFS. mockingbird aims for it, but a quiet recording can land around
+  −15 (mockingbird#127). Measure the render; if it's under −15, tell the user
+  the number rather than re-rendering, which won't change it.

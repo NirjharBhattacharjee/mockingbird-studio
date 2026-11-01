@@ -25,13 +25,17 @@ eye moving through a long take. Leave it out when in doubt.
 2. **Time it.** Call `captions` with the same clips: SRT timed to the cut,
    with the spoken word `*marked*`. Pass that SRT as `motion`'s `captions` and
    it arrives as `m.cues` (`{ start, end, text }`). Use `perCue: 1` when you
-   need every word's own time.
+   need every word's own time. For a `split`, set the template's `CAPTIONS_Y`
+   to 0.5 so the captions sit on the seam.
 3. **Write the script.** Start from [templates/short.ts](./templates/short.ts):
    push-in zoom, a hook card that springs in and slides away, word captions
    that pop with the spoken word in the accent colour and shrink to fit, and a
    progress bar. Copy it next to the video and change it; don't write one
    from nothing.
-4. **Draw.** `motion` with `script` and `path` (the cut). It keeps the cut's
+4. **Draw.** `motion` with `script`, `path` (the cut), and `fps` set to the
+   cut's frame rate (`ffprobe -v error -select_streams v:0 -show_entries
+   stream=r_frame_rate -of csv=p=0 <cut>`; it defaults to 30, which drops
+   frames from a 60 fps cut and judders a 24 fps one). It keeps the cut's
    sound and saves `<name>-motion-N.mp4`. A 6 s pass at 1080x1920 takes about
    4 s on an M3. Iterate on a short stretch with `duration`.
 5. **Check.** `frames` over the result, then the **reviewer** agent.
@@ -88,9 +92,11 @@ Rules that keep it from looking cheap:
 
 Sound goes in `render`'s `audio`, before the motion pass; `motion` keeps it.
 
-- **Music**: `loop: true, duck: true`, `volume` 0.1–0.15. In a short, under
+- **Music**: `duck: true`, `volume` 0.1–0.15. In a short, `loop: true` under
   the whole thing if it fits the mood. In long-form, never under
-  explanation: only an intro, outro or a montage with no talking.
+  explanation: only an intro, outro or a montage with no talking, and then
+  without `loop`, from a file trimmed to that stretch, since a looped sound
+  plays to the end of the video.
 - **A sound effect** on a beat the motion lands on: a whoosh as a card slides,
   a pop as a title springs in. Time the animation to the sound's `at`, one
   every few seconds at most.
@@ -102,4 +108,5 @@ Sound goes in `render`'s `audio`, before the motion pass; `motion` keeps it.
 `motion` reports `draw failed at 2.40 s (frame 72): …` and saves nothing.
 Read the time, fix the script, and render that stretch again with `duration`
 before doing the whole video. A colour or font it doesn't know is an error,
-not a silent black. It needs a Mac with Apple silicon.
+not a silent black. It needs a Mac with Apple silicon; without it, finish
+with `render`'s still `captions` and `texts`, and say so.

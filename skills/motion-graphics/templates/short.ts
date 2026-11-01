@@ -4,6 +4,8 @@
 const HOOK = "3 MISTAKES";
 const ACCENT = "#FFD500";
 const FONT = "SF Pro";
+// Where the captions' middle sits: 0.7 under a face, 0.5 on a split's seam.
+const CAPTIONS_Y = 0.7;
 
 export default function draw(ctx, t, m) {
   const { width: W, height: H } = m;
@@ -27,6 +29,9 @@ export default function draw(ctx, t, m) {
     ctx.rotate(-0.04);
     ctx.font = `900 92px ${FONT}`;
     const width = ctx.measureText(HOOK).width + 100;
+    // A long hook shrinks to 90% of the frame rather than run off it.
+    const fit = Math.min(1, (W * 0.9) / width);
+    ctx.scale(fit, fit);
     ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
     ctx.shadowBlur = 30;
     ctx.shadowOffsetY = 12;
@@ -49,7 +54,7 @@ export default function draw(ctx, t, m) {
     const pop = m.spring(t, { from: 0.85, to: 1, start: cue.start, damping: 14 });
     const words = cue.text.split(/\s+/).map((w) => ({ lit: /^\*.+\*$/.test(w), text: w.replace(/\*/g, "").toUpperCase() }));
     ctx.save();
-    ctx.translate(W / 2, H * 0.7);
+    ctx.translate(W / 2, H * CAPTIONS_Y);
     ctx.scale(pop, pop);
     ctx.font = `900 96px ${FONT}`;
     ctx.textBaseline = "middle";
