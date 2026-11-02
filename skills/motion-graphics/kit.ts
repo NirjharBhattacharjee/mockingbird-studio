@@ -118,16 +118,17 @@ export function expo(p: number) {
   const x = clamp(p);
   return x === 1 ? 1 : 1 - 2 ** (-10 * x);
 }
-/** Its mirror for exits: slow start, fast leave. */
-export const expoIn = (p: number) => {
-  const x = clamp(p);
-  return x === 0 ? 0 : 2 ** (10 * x - 10);
-};
+/**
+ * For exits: a slow start that keeps accelerating (cubic). Not the mirror of
+ * `expo`, whose ease-in barely moves for the first two thirds and reads as
+ * a pop; an exit has to be seen leaving.
+ */
+export const easeIn = (p: number) => clamp(p) ** 3;
 
 /** 0 → 1 over [a, a + fadeIn], held, 1 → 0 over [b − fadeOut, b]. How present an element is. */
 export function presence(t: number, a: number, b = Infinity, fadeIn = 0.45, fadeOut = 0.35) {
   if (t < a || t > b) return 0;
-  return Math.min(expo((t - a) / fadeIn), 1 - expoIn(1 - (b - t) / fadeOut));
+  return Math.min(expo((t - a) / fadeIn), 1 - easeIn(1 - (b - t) / fadeOut));
 }
 
 /** "#RRGGBB" with an alpha, as rgba(). */
@@ -175,14 +176,22 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
   const font = (size: number, weight = 700, family = T.display, italic = false) =>
     `${italic ? "italic " : ""}${weight} ${Math.round(size * u)}px ${family}`;
 
+  /** The alpha each open layer started with, so a fade inside one is a fraction of its parent's. */
+  const alphas: number[] = [];
   /** Wrap a drawing so its state doesn't leak. */
   const layer = (draw: () => void) => {
     ctx.save();
+    alphas.push(ctx.globalAlpha);
     try {
       draw();
     } finally {
+      alphas.pop();
       ctx.restore();
     }
+  };
+  /** Set the alpha to `x` of what the enclosing layer started with: a card fading out takes its contents with it. */
+  const fade = (x: number) => {
+    ctx.globalAlpha = (alphas.at(-1) ?? 1) * x;
   };
 
   /**
@@ -196,7 +205,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
       // A shadow's offset and blur ignore the transform, so move the shape in
       // canvas pixels too, and scale the blur with whatever scale is current.
       const m0 = ctx.getTransform();
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.shadowColor = color.startsWith("#") ? color : T.ink;
       ctx.shadowBlur = blur * 2 * Math.hypot(m0.a, m0.b);
       ctx.shadowOffsetX = far;
@@ -210,7 +219,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
   /** An animated gradient world: a base gradient and three soft lights drifting on slow orbits, plus an optional grid. */
   function backdrop({ drift = 1, grid = false, opacity = 1 } = {}) {
     layer(() => {
-      ctx.globalAlpha = opacity;
+      fade(opacity);
       const base = ctx.createLinearGradient(0, 0, W, H);
       base.addColorStop(0, T.bg[0]);
       base.addColorStop(1, T.bg[1]);
@@ -267,7 +276,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const ox = -hash(m.frame) * s;
     const oy = -hash(m.frame + 0.5) * s;
     layer(() => {
-      ctx.globalAlpha = amount;
+      fade(amount);
       ctx.globalCompositeOperation = "overlay";
       for (let y = oy; y < H; y += s) for (let x = ox; x < W; x += s) ctx.drawImage(tile, x, y, s, s);
     });
@@ -343,7 +352,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const p = (t - at) / dur;
     if (p < 0 || p > 1) return;
     layer(() => {
-      ctx.globalAlpha = (1 - p) * 0.8;
+      fade((1 - p) * 0.8);
       ctx.fillStyle = color;
       ctx.fillRect(0, 0, W, H);
     });
@@ -415,7 +424,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
       const x0 = clamp(area.x + area.w * fx - sw / 2, area.x, area.x + area.w - sw);
       const y0 = clamp(area.y + area.h * fy - sh / 2, area.y, area.y + area.h - sh);
       layer(() => {
-        ctx.globalAlpha = a;
+        fade(a);
         ctx.beginPath();
         ctx.rect(area.x, area.y, area.w, area.h);
         ctx.clip();
@@ -463,7 +472,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const sy = src.y * H + (src.h * H - sh) / 2;
     layer(() => {
       const s = lerp(0.9, 1, a);
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.translate(x + w / 2, y + h / 2);
       ctx.scale(s, s);
       ctx.translate(-w / 2, -h / 2);
@@ -566,7 +575,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
         for (const p of l.pieces) {
           const i = n++;
           const pin = expo((t - at - i * stagger) / 0.55);
-          const pout = t > out ? expoIn((t - out - (total - 1 - i) * stagger * 0.5) / 0.4) : 0;
+          const pout = t > out ? easeIn((t - out - (total - 1 - i) * stagger * 0.5) / 0.4) : 0;
           if (pin <= 0 || pout >= 1) continue;
           const vis = pin * (1 - pout);
           layer(() => {
@@ -575,14 +584,15 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
             ctx.translate(cx, cy + (1 - pin) * size * u * 0.45 - pout * size * u * 0.35);
             const s = style === "slam" ? lerp(1.6, 1, m.spring(t, { start: at + i * stagger, stiffness: 260, damping: 20 })) : 1;
             ctx.scale(fit * s, fit * s);
-            ctx.globalAlpha = clamp(vis);
+            fade(clamp(vis));
             const blur = (style === "blur" ? 22 : 12) * u * (1 - pin + pout);
             ctx.font = p.font;
             // Out of focus: the word blurred, cross-fading to the sharp word as it lands.
             const soft = clamp(blur / (6 * u));
             if (soft > 0) {
-              soften(() => ctx.fillText(p.text, -p.w / 2, 0), p.color, blur, clamp(vis) * soft);
-              ctx.globalAlpha = clamp(vis) * (1 - soft);
+              // soften opens a layer under this one's fade, so it takes `soft` alone.
+              soften(() => ctx.fillText(p.text, -p.w / 2, 0), p.color, blur, soft);
+              fade(clamp(vis) * (1 - soft));
             }
             if (glow) {
               ctx.shadowColor = alpha(T.accent, 0.8);
@@ -620,7 +630,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
       // Letters type on left to right.
       const shown = Math.ceil(chars.length * clamp((t - at) / 0.35));
       chars.slice(0, shown).forEach((c) => {
-        ctx.globalAlpha = a;
+        fade(a);
         ctx.fillText(c, cx, y);
         cx += ctx.measureText(c).width + track;
       });
@@ -648,7 +658,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const v = lerp(from, to, expo((t - at) / dur));
     const text = prefix + v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: group }) + suffix;
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.font = font(size, 800, T.display);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -671,7 +681,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     if (!a) return;
     const n = Math.floor(clamp((t - at) * cps, 0, text.length));
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.font = font(size, 500, family);
       ctx.textBaseline = "middle";
       ctx.fillStyle = color;
@@ -720,7 +730,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
       const s = fit * lerp(0.9, 1, enter);
       ctx.scale(s, s);
       ctx.translate(-l.width / 2, 0);
-      ctx.globalAlpha = enter;
+      fade(enter);
       const padX = size * u * 0.22;
       const padY = size * u * 0.62;
       ctx.fillStyle = T.accent;
@@ -773,7 +783,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const turns = 1.12;
     const len = Math.PI * (rx + ry) * turns;
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       stroke(
         (c) => {
           const steps = 64;
@@ -811,7 +821,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     }
     const p = expo((t - at) / dur);
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       stroke(
         (c) => {
           c.moveTo(x1, y1);
@@ -844,7 +854,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const a = presence(t, at, out, 0.01, 0.3);
     if (!a) return;
     layer(() => {
-      ctx.globalAlpha = a * 0.85;
+      fade(a * 0.85);
       ctx.globalCompositeOperation = T.dark ? "screen" : "multiply";
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -859,7 +869,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     if (!a) return;
     const R = r * u * lerp(1.8, 1, expo((t - at) / 0.5));
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.strokeStyle = color;
       ctx.lineWidth = 4 * u;
       ctx.shadowColor = alpha(T.accent, 0.8);
@@ -917,7 +927,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const rise = (1 - a) * 40 * u;
     const s = lerp(0.96, 1, a);
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.translate(x + w / 2, y + h / 2 + rise);
       ctx.scale(s, s);
       ctx.translate(-w / 2, -h / 2);
@@ -937,7 +947,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
           ctx.roundRect(0, 0, w, h, R);
           ctx.clip();
           ctx.filter = `blur(${Math.round(28 * u)}px) saturate(160%)`;
-          ctx.globalAlpha = a * 0.9;
+          fade(0.9);
           ctx.drawImage(m.video, x, y, w, h, 0, 0, w, h);
         });
       }
@@ -961,7 +971,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
   /** A name and role: an accent bar grows, a glass plate wipes out from it, the name rises, the role follows. */
   function lowerThird({ name, role, at, out = at + 4.5, x = 70 * u, y = H * 0.8 }: { name: string; role?: string; at: number; out?: number; x?: number; y?: number }) {
     if (t < at || t > out + 0.5) return;
-    const leave = t > out ? expoIn((t - out) / 0.4) : 0;
+    const leave = t > out ? easeIn((t - out) / 0.4) : 0;
     const bar = expo((t - at) / 0.35) * (1 - leave);
     const plate = expo((t - at - 0.12) / 0.55) * (1 - leave);
     const nameIn = expo((t - at - 0.22) / 0.5) * (1 - leave);
@@ -990,12 +1000,12 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
         ctx.fillStyle = sheen;
         ctx.fillRect(x + 8 * u, y - h / 2, w, h);
         ctx.textBaseline = "middle";
-        ctx.globalAlpha = nameIn;
+        fade(nameIn);
         ctx.fillStyle = "#FFFFFF";
         ctx.font = font(54, 700);
         ctx.fillText(name, x + 40 * u, y - (role ? 22 : 0) * u + (1 - nameIn) * 30 * u);
         if (role) {
-          ctx.globalAlpha = roleIn;
+          fade(roleIn);
           ctx.fillStyle = T.accent;
           ctx.font = font(32, 500);
           ctx.fillText(role, x + 40 * u, y + 34 * u + (1 - roleIn) * 20 * u);
@@ -1018,7 +1028,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
       ctx.rotate(-0.35 * dir);
       [T.accent, T.bg[0]].forEach((c, i) => {
         const lead = expo(clamp(p * 2 - i * 0.18));
-        const tail = expoIn(clamp(p * 2 - 1 - i * 0.05));
+        const tail = easeIn(clamp(p * 2 - 1 - i * 0.05));
         const x0 = lerp(-span, span, tail * 0.5) * dir;
         const x1 = lerp(-span, span, 0.5 + lead * 0.5) * dir;
         ctx.fillStyle = c;
@@ -1035,9 +1045,9 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
    */
   function chapter({ num, label = "Chapter", title: text, at, out }: { num: string; label?: string; title: Line[]; at: number; out: number }) {
     if (t < at || t > out + 0.5) return;
-    const leave = t > out ? expoIn((t - out) / 0.5) : 0;
+    const leave = t > out ? easeIn((t - out) / 0.5) : 0;
     layer(() => {
-      ctx.globalAlpha = 1 - leave;
+      fade(1 - leave);
       // It leaves by flying through the camera.
       const z = 1 + leave * 1.8;
       ctx.translate(W / 2, H / 2);
@@ -1061,7 +1071,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
         g.addColorStop(1, alpha(T.accent2, 0.15));
         ctx.strokeStyle = g;
         ctx.lineWidth = 4 * u;
-        ctx.globalAlpha = (1 - leave) * expo((t - at) / 0.8);
+        fade(expo((t - at) / 0.8));
         ctx.strokeText(num, 0, 0);
       });
       const below = cy + big * 0.45 + 60 * u;
@@ -1099,7 +1109,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const top = H / 2 - (lineH * (lines.length - 1)) / 2;
     layer(() => {
       backdrop({ opacity: 0.94 * a });
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.font = `900 ${Math.round(size * 4 * u)}px ${T.serif}`;
       ctx.fillStyle = alpha(T.accent, 0.9);
       ctx.textBaseline = "alphabetic";
@@ -1129,7 +1139,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
    */
   function checklist({ items, x = W / 2, y = H * 0.14, at = 0, out = Infinity, size = 40 }: { items: { label: string; done?: number }[]; x?: number; y?: number; at?: number; out?: number; size?: number }) {
     if (t < at || t > out + 0.5) return;
-    const leave = t > out ? expoIn((t - out) / 0.4) : 0;
+    const leave = t > out ? easeIn((t - out) / 0.4) : 0;
     layer(() => {
       ctx.font = font(size, 700);
       const pad = size * u * 0.6;
@@ -1150,7 +1160,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
         layer(() => {
           ctx.translate(cx + w / 2, 0);
           ctx.scale(pin * (1 + 0.12 * pulse), pin * (1 + 0.12 * pulse));
-          ctx.globalAlpha = clamp(pin);
+          fade(clamp(pin));
           ctx.shadowColor = done ? alpha(T.accent, 0.9) : "rgba(0,0,0,0.4)";
           ctx.shadowBlur = (done ? 40 + 40 * pulse : 20) * u;
           ctx.fillStyle = done ? T.accent : "rgba(20,20,24,0.72)";
@@ -1225,7 +1235,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
       ctx.transform(1, 0, -0.08 * (1 - a), 1, 0, 0);
       const s = lerp(0.85, 1, a);
       ctx.scale(s, s);
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.shadowColor = "rgba(0,0,0,0.5)";
       ctx.shadowBlur = 70 * u;
       ctx.shadowOffsetY = 30 * u;
@@ -1256,7 +1266,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     const gap = w * 0.06;
     const bw = (w - gap * (data.length - 1)) / data.length;
     layer(() => {
-      ctx.globalAlpha = a;
+      fade(a);
       ctx.strokeStyle = alpha(T.dark ? "#FFFFFF" : "#000000", 0.25);
       ctx.lineWidth = 2 * u;
       ctx.beginPath();
@@ -1277,12 +1287,12 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
         ctx.fillStyle = T.ink;
         ctx.textAlign = "center";
         ctx.font = font(34, 700);
-        ctx.globalAlpha = a * clamp(p * 2 - 0.5);
+        fade(a * clamp(p * 2 - 0.5));
         ctx.fillText(Math.round(d.value * p).toLocaleString("en-US"), bx + bw / 2, y + h - bh - 26 * u);
         ctx.fillStyle = T.mute;
         ctx.font = font(26, 500);
         ctx.fillText(d.label, bx + bw / 2, y + h + 40 * u);
-        ctx.globalAlpha = a;
+        fade(a);
       });
     });
   }
@@ -1297,6 +1307,7 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     theme: T,
     font,
     layer,
+    fade,
     backdrop,
     grain,
     vignette,

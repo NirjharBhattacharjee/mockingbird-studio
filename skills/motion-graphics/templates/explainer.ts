@@ -6,7 +6,7 @@
 // transcript: every time is seconds into the video `motion` draws over.
 // Without a video (`size` and `duration`), the same scenes make a
 // stand-alone explainer to `inserts` into a render.
-import { expoIn, kit, sfx, THEMES } from "KIT";
+import { easeIn, kit, sfx, THEMES } from "KIT";
 
 // ---- settings --------------------------------------------------------
 const THEME = THEMES.night;
@@ -84,7 +84,7 @@ export default function draw(ctx, t, m) {
         }
       }
     } else if (s.kind === "intro") {
-      const leave = t > s.out ? expoIn((t - s.out) / 0.5) : 0;
+      const leave = t > s.out ? easeIn((t - s.out) / 0.5) : 0;
       k.layer(() => {
         ctx.globalAlpha = 1 - leave;
         const z = 1 + leave * 1.8;

@@ -38,9 +38,9 @@ with itself through one method or the other, not across them.
 | MrBeast, subscribers | short | 29.9 | 5 | 4.99 |
 | Alex Hormozi, hire to replace you | short, talking head | 50.8 | 6 | 7.25 |
 | Varun Mayya, GitHub repos | short, screen + face | 89.0 | 8 | 9.89 |
-| Alex Hormozi, 10 rules | short, one take + whiteboard | 31.8 | 0 | n/a |
-| Ali Abdaal, $2,000 question | short, one take | 57.0 | 1 | n/a |
-| Ali Abdaal, holy trinity | short, one take | 12.8 | 1 | n/a |
+| Alex Hormozi, 10 rules | short, one take + whiteboard | 31.8 | 0 | 31.8 |
+| Ali Abdaal, $2,000 question | short, one take | 57.0 | 1 | 28.5 |
+| Ali Abdaal, holy trinity | short, one take | 12.8 | 1 | 6.4 |
 | Johnny Harris, Djibouti mapped | long-form, maps | 180 | 67 | 2.65 |
 | Apple, Mac mini | product film | 42.9 | 12 | 3.30 |
 | Remotion, GitHub Unwrapped process | documentary | 180 | 38 | 4.62 |
@@ -48,9 +48,9 @@ with itself through one method or the other, not across them.
 | MKBHD, MacBook impressions | review | 180 | 25 | 6.92 |
 | Ali Abdaal, 5 tips | long-form, talking head | 240 | 30 | 7.74 |
 | Fireship, Docker in 100 s | explainer | 126.5 | 12 | 9.73 |
-| Vox, the recession chart | data explainer | 232 | 1 | continuous |
-| Linear, Introducing Linear Agent | launch film | 54.9 | 0 | continuous |
-| Linear, Introducing Releases | launch film | 30.0 | 0 | continuous |
+| Vox, the recession chart | data explainer, continuous camera | 232 | 1 | 116 |
+| Linear, Introducing Linear Agent | launch film, continuous camera | 54.9 | 0 | 54.9 |
+| Linear, Introducing Releases | launch film, continuous camera | 30.0 | 0 | 30.0 |
 
 Two paces, then. Fast shorts change the picture every 1.2 to 2 seconds.
 Talking-head channels hold 5 to 10 seconds a shot, and long-form explainers
