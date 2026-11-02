@@ -66,7 +66,7 @@ Claude doesn't see every tool twice.
 | `hooks` | The first seconds of a short, the first minute of a long video |
 | `retention-editing` | Cutting pauses and retakes, where to cut, punch-ins, pace |
 | `captions` | Word-by-word captions or an SRT, spelled right, placed clear of faces and buttons |
-| `motion-graphics` | Animation as code for mockingbird's `motion` tool, with a tested template, and when to leave it out |
+| `motion-graphics` | Animation as code for mockingbird's `motion` tool: a design kit, templates for shorts and explainers, and sound effects, set from a frame-by-frame study of twenty professional edits |
 | `style-match` | Measure a video that worked and match its pace |
 | `reviewer` agent | Checks every render: size, loudness, black frames, opening, captions, framing |
 
@@ -84,6 +84,9 @@ else you show Claude. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
   cutting, captions and long-form attention, and how strong each piece is.
 - [REVERSE-ENGINEERING.md](./docs/REVERSE-ENGINEERING.md): the numbers taken
   from Remotion's TikTok template and auto-editor.
+- [STYLE-STUDY.md](./docs/STYLE-STUDY.md): twenty professional edits
+  watched frame by frame and measured, and what the motion kit takes from
+  them.
 
 ## Limits
 

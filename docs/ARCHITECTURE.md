@@ -44,8 +44,12 @@ headless Chromium. mockingbird competes with them without a browser: its
 `motion` tool takes a script with the browser's Canvas 2D API and draws each
 frame with Core Graphics on the Mac
 ([MCP.md](https://github.com/NirjharBhattacharjee/mockingbird/blob/main/docs/MCP.md#motion-graphics)).
-Claude writes that script; the `motion-graphics` skill and its template teach
-it how. The plugin depends on neither Remotion nor HyperFrames.
+Claude writes that script against the kit, `skills/motion-graphics/kit.ts`:
+a design system the script imports by absolute path (themes, camera moves,
+kinetic type, captions, cards, marks, sound effects), with templates for a
+short and an explainer. Its defaults come from
+[STYLE-STUDY.md](./STYLE-STUDY.md). The plugin depends on neither Remotion
+nor HyperFrames.
 
 So an edit is two passes: `render` cuts, frames and mixes the sound, then
 `motion` animates on top of the cut.

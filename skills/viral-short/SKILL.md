@@ -58,9 +58,10 @@ instead.
    music low and ducked, and a sound effect only on a beat that matters. For
    a plain captioned short, pass the captions here and stop. For anything
    that moves, leave captions and titles out and go on.
-7. **Animate.** Per **motion-graphics**: a script from its template (hook
-   card, popping word captions, push-in, progress bar), run with `motion`
-   over the cut and the SRT from step 4.
+7. **Animate.** Per **motion-graphics**: a script from its short template
+   (a hook that slams in, a new framing every couple of seconds, punch-ins
+   and pops on the keywords, two or three callouts, pill captions, a sound
+   on each beat), run with `motion` over the cut and the SRT from step 4.
 8. **Review.** Hand the file to the **reviewer** agent with what the short
    is meant to be. Fix what it finds and render again (a new file each time);
    don't argue with a failed check.

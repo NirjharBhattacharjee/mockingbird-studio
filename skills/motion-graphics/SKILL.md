@@ -1,112 +1,137 @@
 ---
 name: motion-graphics
-description: Animate a mockingbird edit with code: titles that spring in, word captions that pop, zooms and pans on the footage, lower thirds, highlight boxes and arrows that draw themselves on, b-roll that slides or fades, progress bars, explainer cards. You write a Canvas 2D script and mockingbird's `motion` tool draws it frame by frame on the Mac. Use whenever a short or long-form edit needs anything on screen to move.
+description: Animate a mockingbird edit with code so it looks professionally edited, not templated: kinetic titles, captions with a pill that follows the voice, a camera that jump-cuts, punches in and glides to what's being discussed, chapter cards, glass cards, checklists, counters, hand-drawn rings and arrows, light leaks, grain, and a sound on every beat. You write a short script against the kit (kit.ts) and mockingbird's `motion` tool draws it frame by frame on the Mac. Use whenever a short or long-form edit needs anything on screen to move.
 ---
 
 # Motion graphics
 
-Motion graphics here are code. You write one TypeScript file whose
-`draw(ctx, t, m)` draws a single frame with the browser's Canvas 2D API, and
-mockingbird's `motion` tool calls it for every frame and saves an MP4. There's
-no browser and no editor: mockingbird draws with macOS's Core Graphics. The
-tool's description lists the whole API; this skill is how to use it well.
-
-Each extra on screen costs attention the speech needs, and music or effects
-under an explanation measurably lower what people remember (Mayer's coherence
-principle, [RESEARCH.md](../../docs/RESEARCH.md)). Animate to do a job: say the
-hook with the sound off, show what the speaker names, mark a turn, keep the
-eye moving through a long take. Leave it out when in doubt.
+Motion graphics here are code. A script's `draw(ctx, t, m)` draws one frame
+with the Canvas 2D API, mockingbird's `motion` tool calls it for every frame
+over the cut and saves an MP4, and **the kit** (`kit.ts`, beside this file)
+does the design: what to draw, how it moves, how it sounds. The defaults
+come from studying twenty professional videos frame by frame
+([docs/STYLE-STUDY.md](../../docs/STYLE-STUDY.md)). They're meant to look
+finished with no further prompting, so start from a template and change its
+settings, not from a blank file.
 
 ## The workflow
 
-1. **Cut first.** `render` makes the cut: clips, framing, b-roll, music and
-   sound effects (it ducks and levels them). Don't pass it `captions` or
-   `texts` if they'll be animated here, or they'll be drawn twice.
-2. **Time it.** Call `captions` with the same clips: SRT timed to the cut,
-   with the spoken word `*marked*`. Pass that SRT as `motion`'s `captions` and
-   it arrives as `m.cues` (`{ start, end, text }`). Use `perCue: 1` when you
-   need every word's own time. For a `split`, set the template's `CAPTIONS_Y`
-   to 0.5 so the captions sit on the seam.
-3. **Write the script.** Start from [templates/short.ts](./templates/short.ts):
-   push-in zoom, a hook card that springs in and slides away, word captions
-   that pop with the spoken word in the accent colour and shrink to fit, and a
-   progress bar. Copy it next to the video and change it; don't write one
-   from nothing.
-4. **Draw.** `motion` with `script`, `path` (the cut), and `fps` set to the
-   cut's frame rate (`ffprobe -v error -select_streams v:0 -show_entries
-   stream=r_frame_rate -of csv=p=0 <cut>`; it defaults to 30, which drops
-   frames from a 60 fps cut and judders a 24 fps one). It keeps the cut's
-   sound and saves `<name>-motion-N.mp4`. A 6 s pass at 1080x1920 takes about
-   4 s on an M3. Iterate on a short stretch with `duration`.
-5. **Check.** `frames` over the result, then the **reviewer** agent.
+1. **Cut first.** `render` makes the cut: clips, framing (`split` for a
+   screen and a face), b-roll `inserts`, music. Leave out its `captions` and
+   `texts`; the kit draws them.
+2. **Caption it.** `captions` with the same clips and `perCue: 3` gives SRT
+   timed to the cut with the spoken word `*marked*`. It's `motion`'s
+   `captions`, and the scripts read it as `m.cues`.
+3. **Copy a template** next to the video and replace `"KIT"` in its import
+   with this skill's absolute path plus `/kit.ts`:
+   - [templates/short.ts](./templates/short.ts) for 9:16. A slammed hook
+     with an italic sub-line; a new framing every ~2.2 s on word starts so
+     one take reads as an edit; punch-ins and a pop on your `KEYWORDS`; two
+     or three big `CALLOUTS`; pill captions; a progress bar, a light leak,
+     a vignette and grain.
+   - [templates/explainer.ts](./templates/explainer.ts) for long-form and
+     anything that explains. Its `SCENES` list is the whole edit: `intro`,
+     `chapter`, `name`, `look` (the camera glides to a point, optionally
+     ringing it and labelling it), `photo`, `quote`, `checklist`.
+4. **Fill in the settings from the transcript.** Times are seconds into the
+   cut. Pick the hook, the keywords, the callouts or the scenes. That's the
+   creative work; the template does the rest.
+5. **Check stills before the whole thing.** `motion` with `duration` set to
+   a few seconds renders the start; for a moment in the middle, render
+   that stretch. A 30 s 1080x1920 short at 60 fps takes about 90 s on an M3.
+6. **Draw it**: `motion` with `script`, `path` (the cut), `captions`, and
+   `fps` matching the cut (`ffprobe -v error -select_streams v:0
+   -show_entries stream=r_frame_rate -of csv=p=0 <cut>`). The template's
+   `audio` export adds the sound effects, mixed and ducked under speech.
+7. **Review**: `frames` over the result, then the **reviewer** agent.
 
-Without a video, `motion` makes graphics on their own (`size`, `duration`):
-an intro card, a chart, a full-screen explainer to `inserts` into a `render`.
+Without a video, `motion` with `size` and `duration` makes graphics on their
+own: run the explainer template with no footage to make a title sequence or
+a chapter card to `inserts` into a `render`.
 
-## Writing the script
+## The kit
 
-- **One file, no imports.** It's read afresh each run, so edit and rerun.
-  Everything you need is on `m`: `interpolate`, `spring`, `ease`, `cues`,
-  `image(path)`, `video`, `width`, `height`, `duration`, `fps`, `frame`.
-- **A function of time.** Compute everything from `t`. No state between
-  frames, no `Date`, no `Math.random()` (use a fixed sequence), so a frame
-  draws the same every time.
-- **The video is already drawn** under each frame. To zoom or pan it, draw
-  `m.video` again with a transform: zooming in covers the original. To zoom
-  out or move it aside, `ctx.clearRect` first.
-- **Wrap each element in `save()` / `restore()`**, so a transform or shadow
-  doesn't leak into the next.
-- **Sizes from the frame**, `m.width` and `m.height`, so a script works at
-  1080x1920 and 1920x1080.
-- **Fonts as CSS**: `"900 96px SF Pro"` (the system font, any weight 100 to
-  900), or any installed family: `"800 80px Avenir Next"`.
+`const k = kit(ctx, t, m, THEMES.night)` at the top of `draw`, then call
+what you need, back to front. Sizes are in units of 1/1080 of the short
+side, so the same script works at 1080x1920 and 1920x1080. Every piece
+takes `at` and usually `out` (seconds) and animates itself in and out.
 
-## Motion that looks finished
+| Layer | Calls |
+|---|---|
+| Atmosphere | `backdrop({ grid })` drifting gradient lights · `bokeh()` · `leak(at)` light leak · `flash(at)` · `scrim({ y })` dark band behind text · `vignette()` · `grain()` |
+| Footage | `camera({ area, focus, cuts, framings, punches, shakes, moves })` returns `{ zoom, project(x, y) }` · `pip({ src, x, y, w, h })` webcam bubble |
+| Type | `title({ lines, style: "rise" \| "slam" \| "blur", glow, gradient })` · `kicker()` · `counter()` · `typewriter()` · `captions({ y, size })` · `quote()` |
+| Marks | `ring()` · `arrow()` · `highlight()` · `stroke(path, length, p)` · `reticle()` · `spotlight()` |
+| Cards and structure | `glass({ inner })` · `lowerThird()` · `chapter()` · `checklist()` · `progress()` · `photo()` · `bars()` · `wipe(at)` |
+| Helpers | `words(cues)` · `cutPoints(cues, every)` · `presence(t, at, out)` · `expo` · `hash(n)` · `sfx(name)` |
 
-| Move | How | Numbers |
-|---|---|---|
-| Pop in | `spring(t, { from: 0.6, to: 1, start })` as the scale | defaults overshoot a little and settle in about a second; `damping: 14` for captions |
-| Slide in or out | `interpolate(t, [t0, t1], [from, to], ease.out)` in, `ease.in` out | 0.25–0.5 s |
-| Fade | `globalAlpha = interpolate(...)` | 0.2–0.3 s; slower reads as sluggish |
-| Push-in | redraw `m.video` scaled 1 → 1.1–1.15 over the take, `ease.inOut` | slow is the point |
-| Punch-in | the same, 1 → 1.3 with a spring, on the line that matters | once or twice a short |
-| Draw-on line or box | `setLineDash([len, len])`, `lineDashOffset = interpolate(t, [t0, t1], [len, 0])` | 0.4–0.6 s |
-| Highlight a word | a `roundRect` behind it in the accent colour, scaled in with a spring | |
-| Lower third | a bar that slides in with `ease.out`, the name after it, 4–5 s on screen | |
-| B-roll | `m.image(path)` drawn over the frame, sliding or scaling in, under the captions | 1–3 s in a short |
+A title's `lines` are runs, so one line can mix faces:
+`[[{ text: "Read the " }, { text: "docs", italic: true, family: T.serif, color: T.accent }]]`.
 
-Rules that keep it from looking cheap:
+**Themes**: `night` (a launch film: near black, violet and blue light),
+`punch` (shorts: black and yellow), `studio` (Apple-style soft grey),
+`neon` (Kurzgesagt purples), `paper` (warm map paper, red ink). Each has a
+display face (SF Pro), an italic serif (Charter) and a mono (Menlo). A font
+that isn't installed is an error, so give a fallback (`"Didot, serif"`).
+Charter, Iowan Old Style, Didot, Georgia, Avenir Next and Helvetica Neue
+are on every Mac.
 
-- **One accent colour, one font,** used the same way all the way through.
-- **Everything eases.** Nothing moves at constant speed except a progress bar.
-- **Things leave as deliberately as they arrive:** slide or fade out, don't
-  just vanish.
-- **Text gets a shadow or an outline** when it sits on footage, never both
-  heavy.
-- **Nothing in the apps' way:** in a short, keep text between about 12% and
-  80% of the height and off the right-hand strip.
-- **One thing moves at a time.** A title arriving while captions pop and the
-  footage zooms is noise.
+**Sounds**: `sfx("whoosh" | "pop" | "tick" | "impact" | "riser" |
+"shimmer" | "click")`, made for the kit, free to use. Return them from the
+script's `audio` export, `{ path, at, volume }`, on the beats the motion
+lands on.
 
-## Sound
+## What makes it look professional
 
-Sound goes in `render`'s `audio`, before the motion pass; `motion` keeps it.
+These come from the style study; the templates already follow them.
 
-- **Music**: `duck: true`, `volume` 0.1–0.15. In a short, `loop: true` under
-  the whole thing if it fits the mood. In long-form, never under
-  explanation: only an intro, outro or a montage with no talking, and then
-  without `loop`, from a file trimmed to that stretch, since a looped sound
-  plays to the end of the video.
-- **A sound effect** on a beat the motion lands on: a whoosh as a card slides,
-  a pop as a title springs in. Time the animation to the sound's `at`, one
-  every few seconds at most.
-- Licensing is the user's call; a song they don't have rights to gets the
-  video muted or blocked. YouTube's Audio Library is free for YouTube.
+- **Change the picture every 1.2 to 2.5 s in a short.** Cuts, a new
+  framing, b-roll, a callout: something. `cutPoints` places framings on
+  word starts; alternate framings 1.0 / 1.16 / 1.06 / 1.24 hide jump cuts.
+- **Nothing flat.** Text sits on a scrim, a glass card or a backdrop, never
+  bare on busy footage. Light comes from gradients; grain and a vignette
+  finish every frame.
+- **The camera never stops.** Every shot drifts in a few per cent. On a
+  screen recording, `look` scenes (`camera`'s `moves`) glide to what's
+  being described and back, and `pip` keeps the webcam in frame.
+- **Reveal in a stagger.** Words about 60 ms apart; a list item at a time;
+  rings and arrows drawn on in about 0.5 s. Things leave as deliberately
+  as they come.
+- **Structure that stays.** A progress bar, a checklist that ticks as each
+  point is made, chapter cards with numbers. It tells the viewer how much
+  is left.
+- **One accent, one display face, one serif.** The serif italic is for the
+  turn of phrase ("you will *not* learn"), not decoration.
+- **A sound on every beat, nothing in between.** Music under explanation
+  lowers recall (Mayer's coherence principle, [RESEARCH.md](../../docs/RESEARCH.md));
+  effects on the beats are what make motion feel heavy.
+- **Keep the apps' furniture clear** in a short: text between about 12%
+  and 80% of the height and off the right-hand strip.
+- **Restraint still wins.** One callout at a time, two or three a short.
+  If it doesn't do a job (say the hook, show what's named, mark a turn, keep
+  the eye moving), leave it out.
+
+## Writing your own pieces
+
+- One `draw` export; import the kit by absolute path. The script is loaded
+  fresh for each `motion` call.
+- Everything is a function of `t`: no state between frames, no `Date`, no
+  `Math.random()` (`hash(n)` is a fixed random). Work things out once from
+  `m.cues` and cache them at module level, as the templates do with
+  `plan`.
+- Wrap each element in `k.layer(() => …)` so transforms and shadows don't
+  leak.
+- `ctx.filter = "blur(…)"` blurs the whole frame, about 6 ms each time; for
+  soft text the kit draws a shadow instead (`title`'s blur costs 0.4 ms).
+  A full-frame `backdrop` is about 35 ms; over footage the template's
+  layers cost about 25 ms a frame.
+- The video is drawn under each frame. To zoom or pan, `camera` redraws it;
+  for anything custom, `ctx.drawImage(m.video, sx, sy, sw, sh, dx, dy, dw, dh)`.
 
 ## When it fails
 
 `motion` reports `draw failed at 2.40 s (frame 72): …` and saves nothing.
-Read the time, fix the script, and render that stretch again with `duration`
-before doing the whole video. A colour or font it doesn't know is an error,
-not a silent black. It needs a Mac with Apple silicon; without it, finish
-with `render`'s still `captions` and `texts`, and say so.
+Read the time, fix the script, and render that stretch again with
+`duration` before doing the whole video. An unknown colour or font is an
+error, not a silent fallback. It needs a Mac with Apple silicon; without
+one, finish with `render`'s still `captions` and `texts`, and say so.
