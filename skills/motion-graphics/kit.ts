@@ -548,14 +548,16 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     gradient?: boolean;
     maxWidth?: number;
   }) {
-    if (t < at || t > out + 0.6) return;
+    if (t < at) return;
     const laid = lines.map((l) => layout(l, size));
+    const total = laid.reduce((a, l) => a + l.pieces.length, 0);
+    // The last word leaves (total - 1) staggers after the first, and takes 0.4 s.
+    if (t > out + (total - 1) * stagger * 0.5 + 0.45) return;
     const widest = Math.max(...laid.map((l) => l.width));
     const fit = Math.min(1, maxWidth / widest);
     const lineH = size * u * leading * fit;
     const top = y - (lineH * (laid.length - 1)) / 2;
     let n = 0;
-    const total = laid.reduce((a, l) => a + l.pieces.length, 0);
     layer(() => {
       ctx.textBaseline = "middle";
       ctx.textAlign = "left";
@@ -1089,7 +1091,8 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
 
   /** A pull quote over the whole frame: the footage sinks into the backdrop, a huge quote mark, the words blur in. */
   function quote({ text, by, at, out, size = 84 }: { text: string; by?: string; at: number; out: number; size?: number }) {
-    const a = presence(t, at, out, 0.5, 0.45);
+    // The backdrop fades after `out`, while the words play their exit.
+    const a = presence(t, at, out + 0.5, 0.5, 0.5);
     if (!a) return;
     const lines = wrap(text, size, W * 0.72);
     const lineH = size * u * 1.25;

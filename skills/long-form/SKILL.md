@@ -72,7 +72,7 @@ after.
 10. **Animate.** Per **motion-graphics**, from its explainer template: a
     chapter card where the topic changes sharply, a name the first time
     someone's named, `look` scenes that glide the camera to what the speaker
-    points at on screen and ring it, a checklist when the video works through
+    points at on screen and optionally ring it, a checklist when the video works through
     a list, a pull quote for the line to remember. Run `motion` over the
     render; for a long video, try the script with `duration` on a short
     stretch first.

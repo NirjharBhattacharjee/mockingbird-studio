@@ -22,8 +22,10 @@ the notes and numbers below.
    moments that mattered (title reveals, a HUD lighting up, an end card)
    to time them frame by frame.
 
-To repeat it on a new reference, the `style-match` skill's
-`scripts/measure.sh` does step 2.
+To repeat these numbers, run the same `scdet` filter. The `style-match`
+skill's `scripts/measure.sh` uses ffmpeg's scene score instead
+(`select='gt(scene,0.3)'`), which counts fewer cuts, so compare a reference
+with itself through one method or the other, not across them.
 
 ## The numbers
 
@@ -151,7 +153,7 @@ few and quiet; the camera work carries it.
 | Structure on screen | `checklist`, `progress`, `chapter`, `lowerThird` |
 | Mixed type | lines are runs: `{ text, weight, italic, family, color }`; themes carry a display face, an italic serif (Charter) and a mono (Menlo) |
 | Captions as part of the design | `captions`: groups pop in, a pill in the accent colour slides from word to word under the voice |
-| A sound on every beat | seven sounds made for the kit (`sfx("pop")` and so on), wired to the beats by the templates' `audio` export |
+| A sound on every beat | seven sounds made for the kit (`sfx("pop")` and so on); the templates' `audio` exports put five of them on their beats, and `tick` and `riser` are there for counters and reveals |
 | Five looks | `THEMES`: `night` (launch film), `punch` (shorts), `studio` (product), `neon` (Kurzgesagt), `paper` (maps) |
 
 ## What it doesn't do yet

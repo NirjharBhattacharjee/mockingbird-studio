@@ -53,7 +53,7 @@ function beats(cues: { start: number; end: number; text: string }[]) {
 let plan: ReturnType<typeof beats> | undefined;
 
 export default function draw(ctx, t, m) {
-  plan ??= beats(m.cues);
+  plan ??= beats(m.cues ?? []);
   const { cuts, punches } = plan;
   const k = kit(ctx, t, m, THEME);
   const { W, H, u } = k;
