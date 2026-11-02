@@ -1291,6 +1291,9 @@ export function kit(ctx: any, t: number, m: any, theme: Theme = THEMES.night as 
     W,
     H,
     u,
+    /** The canvas context and the scene, for pieces a script draws itself. */
+    ctx,
+    m,
     theme: T,
     font,
     layer,

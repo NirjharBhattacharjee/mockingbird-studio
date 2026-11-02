@@ -120,7 +120,9 @@ These come from the style study; the templates already follow them.
   `m.cues` and cache them at module level, as the templates do with
   `plan`.
 - Wrap each element in `k.layer(() => …)` so transforms and shadows don't
-  leak.
+  leak. `k.ctx` and `k.m` are there for pieces you draw yourself, so a
+  helper function only needs `k`; a `glass` card's `inner` draws in the
+  card's own coordinates.
 - `ctx.filter = "blur(…)"` blurs the whole frame, about 6 ms each time; for
   soft text the kit draws a shadow instead (`title`'s blur costs 0.4 ms).
   A full-frame `backdrop` is about 35 ms; over footage the template's
