@@ -69,11 +69,13 @@ after.
    outro or a montage, ducked. A long video takes a while (about a quarter of
    its length on an M3); in Claude Code, raise `MCP_TOOL_TIMEOUT` if it's cut
    off.
-10. **Animate, sparingly.** Per **motion-graphics**: a section card that
-    slides in at each chapter start where the topic changes sharply, a lower
-    third the first time someone's named, a highlight box that draws on round
-    what the speaker points at on screen. Run `motion` over the render; for a
-    long video, try the script with `duration` on a short stretch first.
+10. **Animate.** Per **motion-graphics**, from its explainer template: a
+    chapter card where the topic changes sharply, a name the first time
+    someone's named, `look` scenes that glide the camera to what the speaker
+    points at on screen and optionally ring it, a checklist when the video works through
+    a list, a pull quote for the line to remember. Run `motion` over the
+    render; for a long video, try the script with `duration` on a short
+    stretch first.
 11. **Titles and thumbnails.** Three titles, each a different angle on the same
     true promise, and three thumbnail stills from `frames` (a clear face with
     an expression, the result or object itself, and one without a face).
