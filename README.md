@@ -1,5 +1,16 @@
 # mockingbird-studio
 
+> **This plugin moved.** Since mockingbird v0.4.2 it lives in mockingbird's
+> repo as [`plugin/`](https://github.com/NirjharBhattacharjee/mockingbird/tree/main/plugin)
+> and is called `mockingbird`. Install it from there:
+>
+> ```text
+> /plugin marketplace add NirjharBhattacharjee/mockingbird
+> /plugin install mockingbird@mockingbird
+> ```
+>
+> Then `/plugin uninstall mockingbird-studio`. This repo isn't updated anymore.
+
 A Claude Code plugin that edits your videos into shorts for YouTube Shorts,
 Instagram Reels and TikTok, and into long-form edits for YouTube. Give it a
 recording; it picks the moments, cuts the pauses, opens on a hook, captions
