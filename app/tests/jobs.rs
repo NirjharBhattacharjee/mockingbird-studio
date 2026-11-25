@@ -196,3 +196,228 @@ fn a_crashed_runner_leaves_its_jobs_interrupted() {
         (Some("failed"), Some("interrupted"))
     );
 }
+
+fn mb_start(home: &Path, project: &Path, tool: &str, args: Value) -> Result<Value, String> {
+    let (p, a) = (project.to_str().unwrap(), args.to_string());
+    let argv = [
+        "job-start",
+        "--kind",
+        "mockingbird",
+        "--tool",
+        tool,
+        "--project",
+        p,
+        "--args",
+        &a,
+    ];
+    cli(home, &argv)
+}
+
+/// Waits for a job to end, without a deadline when `within` is `None`, and
+/// returns it.
+fn wait_end(home: &Path, id: &str, within: Option<Duration>) -> Value {
+    let end = within.map(|d| Instant::now() + d);
+    loop {
+        let j = job(home, id);
+        if !matches!(j["state"].as_str(), Some("queued" | "running")) {
+            return j;
+        }
+        assert!(end.is_none_or(|e| Instant::now() < e), "timed out: {j}");
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+const MINUTE: Option<Duration> = Some(Duration::from_secs(60));
+
+#[test]
+fn a_mockingbird_job_calls_one_tool_over_mcp() {
+    let home = home("mockingbird");
+    let dir = home.join("video");
+    cli(
+        &home,
+        &[
+            "project-new",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--title",
+            "Example",
+        ],
+    )
+    .unwrap();
+    let out = dir.canonicalize().unwrap().join("renders/a.mp4");
+    // A stand-in for `mockingbird mcp`: it answers, sends a notification and
+    // a request of its own, and replies only once the client has answered.
+    let fake = home.join("fake-mockingbird");
+    fs::write(
+        &fake,
+        format!(
+            r#"#!/bin/sh
+[ "$1" = mcp ] || exit 9
+read l; echo '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-06-18","capabilities":{{}},"serverInfo":{{"name":"fake","version":"0"}}}}}}'
+read l; read call
+echo '{{"jsonrpc":"2.0","method":"notifications/progress","params":{{}}}}'
+echo '{{"jsonrpc":"2.0","id":"s1","method":"ping"}}'
+read l; case "$l" in *'"id":"s1"'*) ;; *) exit 3;; esac
+case "$call" in *'"name":"motion"'*) ;; *) exit 4;; esac
+case "$call" in *'"duration":2'*) ;; *) exit 5;; esac
+mkdir -p '{dir}'; printf made > '{out}'
+echo '{{"jsonrpc":"2.0","id":2,"result":{{"content":[{{"type":"text","text":"rendered"}}],"isError":false}}}}'
+cat > /dev/null
+"#,
+            dir = out.parent().unwrap().display(),
+            out = out.display()
+        ),
+    )
+    .unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(&fake)
+        .status()
+        .unwrap();
+    fs::write(
+        home.join("config.toml"),
+        format!("mockingbird = {:?}\n", fake.to_str().unwrap()),
+    )
+    .unwrap();
+
+    let args = json!({"script": "/x/page.html", "duration": 2, "out": out});
+    let id = mb_start(&home, &dir, "motion", args).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let j = wait_end(&home, &id, MINUTE);
+    assert_eq!(j["state"], "done", "{j}");
+    assert_eq!(j["kind"], "mockingbird");
+    assert_eq!(j["outputs"], json!(["renders/a.mp4"]));
+    assert!(j["log"].as_str().unwrap().contains("rendered"), "{j}");
+
+    // mockingbird going away without a reply fails the job.
+    let args = json!({"script": "/x/page.html", "duration": 3});
+    let id = mb_start(&home, &dir, "motion", args).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(wait_end(&home, &id, MINUTE)["state"], "failed");
+
+    // A server that dies while something it started holds stdout open.
+    let orphan = home.join("orphan-mockingbird");
+    fs::write(&orphan, "#!/bin/sh\nsleep 30 &\nexit 0\n").unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(&orphan)
+        .status()
+        .unwrap();
+    let config = |v: &str| fs::write(home.join("config.toml"), format!("mockingbird = {v}\n"));
+    config(&format!("{:?}", orphan.to_str().unwrap())).unwrap();
+    let began = Instant::now();
+    let id = mb_start(&home, &dir, "motion", json!({})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let j = wait_end(&home, &id, MINUTE);
+    assert_eq!(j["state"], "failed", "{j}");
+    assert!(
+        j["log"]
+            .as_str()
+            .unwrap()
+            .contains("exited without replying"),
+        "{j}"
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        began.elapsed()
+    );
+
+    // mockingbird set to something that isn't a path is refused.
+    config("1").unwrap();
+    let err = mb_start(&home, &dir, "motion", json!({})).unwrap_err();
+    assert!(err.contains("program's path"), "{err}");
+    config(&format!("{:?}", fake.to_str().unwrap())).unwrap();
+
+    for (tool, args) in [
+        ("transcribe", json!({})),
+        ("motion", json!(["not", "an", "object"])),
+        (
+            "motion",
+            json!({"script": "/x/page.html", "out": "renders/a.mp4"}),
+        ),
+        ("motion", json!({"script": "/x/page.html", "out": 1})),
+    ] {
+        assert!(mb_start(&home, &dir, tool, args).is_err(), "{tool}");
+    }
+    let p = dir.to_str().unwrap();
+    let with_values = [
+        "job-start",
+        "--kind",
+        "mockingbird",
+        "--tool",
+        "motion",
+        "--project",
+        p,
+        "--args",
+        "{}",
+        "--values",
+        "out=x",
+    ];
+    assert!(cli(&home, &with_values).is_err());
+}
+
+/// S4: a long `motion` call through the runner, with no timeout. The length
+/// is `MOTION_SECONDS` of video (default 2); about 5 minutes of rendering is
+/// the measurement. Needs mockingbird and its Chrome.
+#[test]
+#[ignore]
+fn a_real_motion_call_runs_to_the_end() {
+    let home = home("motion");
+    let dir = home.join("video");
+    cli(
+        &home,
+        &[
+            "project-new",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--title",
+            "Example",
+        ],
+    )
+    .unwrap();
+    let program = std::env::var("MOCKINGBIRD")
+        .unwrap_or_else(|_| format!("{}/.local/bin/mockingbird", std::env::var("HOME").unwrap()));
+    fs::write(
+        home.join("config.toml"),
+        format!("mockingbird = {program:?}\n"),
+    )
+    .unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let page = dir.join("page.html");
+    fs::write(
+        &page,
+        "<!doctype html><style>body{margin:0;background:#123}\
+         div{width:200px;height:200px;margin:200px;background:#fc0;\
+         animation:spin 2s linear infinite}\
+         @keyframes spin{to{transform:rotate(360deg)}}</style><div></div>",
+    )
+    .unwrap();
+    let secs: f64 = std::env::var("MOTION_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2.0);
+    let out = dir.join("motion.mp4");
+    let args = json!({"script": page, "duration": secs, "size": "640x360", "out": out});
+    let id = mb_start(&home, &dir, "motion", args).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let began = Instant::now();
+    let j = wait_end(&home, &id, None);
+    eprintln!(
+        "motion of {secs} s: {} after {:?}\n{}",
+        j["state"],
+        began.elapsed(),
+        j["log"].as_str().unwrap_or_default()
+    );
+    assert_eq!(j["state"], "done", "{j}");
+    assert_eq!(j["outputs"], json!(["motion.mp4"]));
+    assert!(fs::metadata(&out).unwrap().len() > 0);
+}

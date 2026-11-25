@@ -166,13 +166,18 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "job_start",
-        help: "Queue a long job. It runs in a separate runner, two at a time, and keeps going after the chat or window that queued it closes. The kind tool runs a tool declared in config.toml with values for its placeholders, never a command line.",
+        help: "Queue a long job. It runs in a separate runner, two at a time, and keeps going after the chat or window that queued it closes. The kind tool runs a tool declared in config.toml with values for its placeholders, never a command line. The kind mockingbird makes one call to mockingbird's motion, render or look with args, and waits however long it takes.",
         args: &[
-            req("kind", Text, "The job's kind: tool."),
+            req("kind", Text, "The job's kind: tool or mockingbird."),
             req(
                 "tool",
                 Text,
-                "The tool's name, from [tool.<name>] in config.toml.",
+                "For kind tool, the tool's name from [tool.<name>] in config.toml. For kind mockingbird: motion, render or look.",
+            ),
+            opt(
+                "args",
+                Text,
+                "For kind mockingbird: the tool's arguments as a JSON object, with absolute paths. Give out to have the file listed as the job's output.",
             ),
             opt(
                 "values",
@@ -538,13 +543,13 @@ fn redo(a: &Args, via: Via) -> Result<Value> {
 }
 
 fn job_start(a: &Args, _: Via) -> Result<Value> {
-    if a.text("kind") != "tool" {
+    let kind = a.text("kind");
+    if kind != "tool" && kind != "mockingbird" {
         return Err(format!(
-            "no job kind {:?}; the kinds are: tool",
-            a.text("kind")
+            "no job kind {kind:?}; the kinds are: tool, mockingbird"
         ));
     }
-    let values = a
+    let values: std::collections::BTreeMap<String, String> = a
         .list("values")
         .into_iter()
         .map(|kv| match kv.split_once('=') {
@@ -559,6 +564,21 @@ fn job_start(a: &Args, _: Via) -> Result<Value> {
             .as_ref()
             .ok_or("a job for a step needs its project")?;
         store::read::<Project>(&dir.join(PROJECT_FILE))?.check_submit(step)?;
+    }
+    if kind == "mockingbird" {
+        if !values.is_empty() {
+            return Err("a mockingbird job takes args, not values".into());
+        }
+        let args = a.opt("args").ok_or("a mockingbird job needs args")?;
+        return Ok(json!(jobs::start_mockingbird(
+            &a.text("tool"),
+            &args,
+            project,
+            step
+        )?));
+    }
+    if a.opt("args").is_some() {
+        return Err("a tool job takes values, not args".into());
     }
     Ok(json!(jobs::start(&a.text("tool"), values, project, step)?))
 }

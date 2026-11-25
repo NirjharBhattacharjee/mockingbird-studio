@@ -394,7 +394,8 @@ Later: `job_start`, `jobs`, `job`, `job_cancel` (M2); `niches`, `niche_add`,
 
 `mockingbird-studio <operation> [--flags] [--json]`, with dashes for
 underscores: `mockingbird-studio note-add --project … --step script --text …`.
-With no arguments the binary opens the window. `mcp`, `runner` and `setup`
+With no arguments the binary opens the window. `mcp`, `runner`,
+`mockingbird-call` (the runner's side of a `mockingbird` job) and `setup`
 are the commands that aren't operations. `setup [--yes] [--config <file>]`
 adds the `mcp` entry to Claude Desktop's config after asking; `--yes` skips
 the question, except when the binary's path won't last (under `target/`, or a
@@ -514,6 +515,14 @@ Those that exist when it's done are the job's outputs. `jobs_at_once` in
 `config.toml` changes the two at a time. Give each command's program as an absolute
 path: the runner inherits whatever minimal `PATH` launched the caller, such
 as Claude Desktop's.
+
+A `mockingbird` job takes the tool's arguments as one JSON object in `args`,
+with absolute paths, as mockingbird wants them. The runner runs
+`mockingbird-studio mockingbird-call`, which starts `mockingbird mcp` in the
+job's process group, so cancel stops both. It waits for the reply with no
+time limit. The `out` argument, if the file exists at the end, is the job's
+output. `mockingbird` in `config.toml` is the program's absolute path;
+without it the runner looks on its `PATH`.
 
 ### Preview copies and the timeline
 

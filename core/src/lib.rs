@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod jobs;
 pub mod mcp;
+pub mod mockingbird;
 pub mod ops;
 pub mod project;
 pub mod rounds;
