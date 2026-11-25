@@ -111,3 +111,15 @@ dialog {
 }
 dialog form { display: grid; gap: 8px; }
 dialog .actions { justify-content: flex-end; }
+
+.sheet { flex: 1; padding: 16px; }
+.sheet-head { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.sheet-head:first-child { margin-top: 0; }
+.sheet h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--soft); margin: 0; }
+.sheet-head button { margin-left: auto; padding: 1px 8px; }
+.sheet .count, .sheet .over { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--soft); }
+.sheet .over { color: #d70015; }
+#preview .sheet p { margin: 4px 0; color: inherit; }
+#preview .sheet > p:first-of-type { font-size: 17px; font-weight: 600; }
+#preview .sheet pre { padding: 0; margin: 4px 0; font: inherit; }
+#preview .sheet .declarations { margin-top: 16px; color: var(--soft); }

@@ -144,6 +144,7 @@ function drawPreview(out, round) {
   // status.project is the canonical folder, which is what the scope allows.
   const src = convertFileSrc(`${status.project}/${out.path}`);
   const url = `${src}?r=${round}`; // a new round of the same file name isn't served from cache
+  if (out.path === "description/sheet.toml") return drawSheet(box);
   switch (out.kind) {
     case "text": {
       const pre = el("pre");
@@ -174,6 +175,35 @@ function drawPreview(out, round) {
     default:
       box.append(el("p", `No preview for ${out.path}.`));
   }
+}
+
+// The description sheet as YouTube lays it out, each part with its count
+// against YouTube's limit and a copy button.
+async function drawSheet(box) {
+  const key = previewKey;
+  let s;
+  try {
+    s = await op("sheet", { project: sel.project });
+  } catch (e) {
+    return showError(e);
+  }
+  if (key !== previewKey) return; // another file was picked meanwhile
+  const yes = (b) => (b ? "yes" : "no");
+  const part = (label, tag, text, count, limit, unit) => {
+    const head = el("div", null, { class: "sheet-head" });
+    const copy = el("button", "Copy", { type: "button", "aria-label": `Copy the ${label}` });
+    copy.onclick = () => navigator.clipboard.writeText(text).catch(showError);
+    head.append(el("h3", label), el("span", `${count} / ${limit} ${unit}`, { class: count > limit ? "over" : "count" }), copy);
+    sheet.append(head, el(tag, text));
+  };
+  const sheet = el("div", null, { class: "sheet" });
+  part("Title", "p", s.title, s.counts.title, 100, "characters");
+  part("Description", "pre", s.description, s.counts.description, 5000, "bytes");
+  part("Tags", "p", s.tags.join(", "), s.counts.tags, 500, "characters");
+  sheet.append(
+    el("p", `Category ${s.category} · made for kids: ${yes(s.made_for_kids)} · altered or synthetic content: ${yes(s.altered_content)}`, { class: "declarations" }),
+  );
+  box.replaceChildren(sheet);
 }
 
 function drawNotes() {

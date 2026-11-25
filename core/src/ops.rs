@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::jobs;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
+use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +208,12 @@ pub const OPS: &[Op] = &[
         help: "Stop a queued or running job: SIGTERM, then SIGKILL after 5 seconds.",
         args: &[req("id", Text, "The job's id.")],
         run: job_cancel,
+    },
+    Op {
+        name: "sheet",
+        help: "The description step's sheet as YouTube lays it out: the description with its chapter lines, and the counts YouTube limits.",
+        args: &[PROJECT],
+        run: sheet,
     },
 ];
 
@@ -442,9 +449,9 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
         p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
         // After the gate check, so a gate refusal comes first. An Err here
         // writes nothing. A match so the next step's checks are one more arm.
-        #[allow(clippy::single_match)]
         match step.as_str() {
             "thumbnail" => crate::thumbnail::check(&dir, &paths)?,
+            "description" => sheet::check_submit(&dir, &paths)?,
             _ => {}
         }
         Ok(json!(p.step(&step)?))
@@ -561,6 +568,23 @@ fn job(a: &Args, _: Via) -> Result<Value> {
 fn job_cancel(a: &Args, _: Via) -> Result<Value> {
     jobs::cancel(&a.text("id"))?;
     Ok(json!({"id": a.text("id"), "cancel": "asked"}))
+
+fn sheet(a: &Args, _: Via) -> Result<Value> {
+    let s = sheet::read(&a.project()?)?;
+    let description = s.full_description();
+    Ok(json!({
+        "counts": {
+            "title": s.title.chars().count(),
+            "description": description.len(),
+            "tags": s.tags_chars(),
+        },
+        "description": description,
+        "title": s.title,
+        "tags": s.tags,
+        "category": s.category,
+        "made_for_kids": s.made_for_kids,
+        "altered_content": s.altered_content,
+    }))
 }
 
 #[cfg(test)]
@@ -610,7 +634,8 @@ mod tests {
                 "job_start",
                 "jobs",
                 "job",
-                "job_cancel"
+                "job_cancel",
+                "sheet"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
@@ -818,5 +843,57 @@ mod tests {
         assert_eq!(status["steps"][0]["last_decision"]["decision"], "approved");
         let n = run("notes", p(json!({}))).unwrap();
         assert_eq!(n, json!({"notes": [], "redo": []}));
+    }
+
+    #[test]
+    fn the_description_step_checks_its_sheet() {
+        let t = setup();
+        let dir = new_project(t.path(), "sheet");
+        let root = Path::new(&dir);
+        let submit = |files: Value| {
+            run(
+                "submit",
+                json!({"project": dir, "step": "description", "files": files}),
+            )
+        };
+        fs::write(root.join("description/notes.md"), "x").unwrap();
+        let err = submit(json!(["description/notes.md"])).unwrap_err();
+        assert!(err.contains("needs description/sheet.toml"), "{err}");
+
+        let good = "title = \"Example\"\ndescription = \"About it.\"\ntags = [\"a\"]\n\
+                    category = 28\nmade_for_kids = false\naltered_content = false\n";
+        fs::write(root.join(sheet::PATH), format!("{good}nope = 1\n")).unwrap();
+        let err = submit(json!([sheet::PATH])).unwrap_err();
+        assert!(err.contains("unknown field"), "{err}");
+        let long = format!("title = \"{}\"\n{}", "x".repeat(101), &good[18..]);
+        fs::write(root.join(sheet::PATH), long).unwrap();
+        let err = submit(json!([sheet::PATH])).unwrap_err();
+        assert!(err.starts_with("title is 101 characters"), "{err}");
+
+        // A good sheet is taken once every step before it is approved.
+        fs::write(root.join(sheet::PATH), good).unwrap();
+        let steps = run("status", json!({"project": dir})).unwrap()["steps"].clone();
+        for s in steps.as_array().unwrap() {
+            let id = s["id"].as_str().unwrap();
+            if id == "description" {
+                break;
+            }
+            fs::write(root.join(format!("{id}.md")), "x").unwrap();
+            let files = json!([format!("{id}.md")]);
+            run(
+                "submit",
+                json!({"project": dir, "step": id, "files": files}),
+            )
+            .unwrap();
+            if s["gate"] == true {
+                run("approve", json!({"project": dir, "step": id})).unwrap();
+            }
+        }
+        submit(json!([sheet::PATH])).unwrap();
+        let view = run("sheet", json!({"project": dir})).unwrap();
+        assert_eq!(
+            view["counts"],
+            json!({"title": 7, "description": 9, "tags": 1})
+        );
     }
 }
