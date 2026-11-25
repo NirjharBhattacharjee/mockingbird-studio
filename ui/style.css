@@ -65,6 +65,10 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 }
 #preview pre { margin: 0; padding: 16px; white-space: pre-wrap; font: 13px/1.5 ui-monospace, Menlo, monospace; flex: 1; }
 #preview img, #preview video { max-width: 100%; max-height: 100%; margin: auto; }
+#preview.thumb { flex-direction: column; gap: 16px; padding: 16px; align-items: flex-start; }
+#preview.thumb > img { width: 1280px; max-width: 100%; height: auto; margin: 0; }
+.feed { display: flex; gap: 10px; align-items: flex-start; max-width: 360px; font-weight: 600; }
+.feed img { flex: none; width: 168px; height: 94px; border-radius: 6px; margin: 0; }
 #preview audio { margin: auto; width: 90%; }
 #preview embed { flex: 1; }
 #preview p { margin: auto; color: var(--soft); }

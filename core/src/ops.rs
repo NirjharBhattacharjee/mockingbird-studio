@@ -387,6 +387,12 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
         })
         .collect::<Result<Vec<_>>>()?;
     let step = a.text("step");
+    if step == "thumbnail" {
+        crate::thumbnail::check(
+            &dir,
+            &outputs.iter().map(|o| o.path.clone()).collect::<Vec<_>>(),
+        )?;
+    }
     store::update_project(&dir, |p| {
         p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
         Ok(json!(p.step(&step)?))
@@ -617,6 +623,35 @@ mod tests {
         .unwrap();
         assert_eq!(step["output"][0]["path"], "research/topic.md");
         assert_eq!(step["output"][0]["kind"], "text");
+    }
+
+    #[test]
+    fn submit_on_the_thumbnail_step_checks_the_image() {
+        let t = setup();
+        let dir = new_project(t.path(), "thumb");
+        let d = Path::new(&dir);
+        for id in ["research", "script", "look"] {
+            let f = format!("{id}/x.md");
+            fs::write(d.join(&f), "x").unwrap();
+            run("submit", json!({"project": dir, "step": id, "files": [f]})).unwrap();
+            run("approve", json!({"project": dir, "step": id})).unwrap();
+        }
+        let submit = |f: &str| {
+            run(
+                "submit",
+                json!({"project": dir, "step": "thumbnail", "files": [f]}),
+            )
+        };
+        fs::write(d.join("thumbnail/a.png"), b"not an image").unwrap();
+        assert!(
+            submit("thumbnail/a.png")
+                .unwrap_err()
+                .contains("not a PNG or JPEG")
+        );
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend([0, 0, 5, 0, 0, 0, 2, 0xD0, 8, 2, 0, 0, 0]);
+        fs::write(d.join("thumbnail/a.png"), png).unwrap();
+        assert_eq!(submit("thumbnail/a.png").unwrap()["state"], "review");
     }
 
     #[test]
