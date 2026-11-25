@@ -16,5 +16,5 @@ fn mcp_exits_with_empty_stdout() {
 fn other_arguments_go_to_the_cli() {
     let out = Command::new(BIN).arg("status").output().unwrap();
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("no CLI commands yet"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--project"));
 }
