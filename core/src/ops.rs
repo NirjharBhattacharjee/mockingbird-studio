@@ -450,7 +450,7 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
     if files.is_empty() {
         return Err("submit needs at least one file".into());
     }
-    let outputs = files
+    let mut outputs = files
         .iter()
         .map(|f| {
             inside(&dir, f).map(|path| Output {
@@ -460,9 +460,13 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    // Before the lock: ffprobe takes a moment per file.
+    let mut warnings = vec![];
+    let need = crate::proxy::probe(&dir, &mut outputs, &mut warnings);
+    let mut proxy_jobs = vec![];
     let step = a.text("step");
     let paths: Vec<String> = outputs.iter().map(|o| o.path.clone()).collect();
-    store::update_project(&dir, |p| {
+    let mut v = store::update_project(&dir, |p| {
         p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
         // After the gate check, so a gate refusal comes first. An Err here
         // writes nothing. A match so the next step's checks are one more arm.
@@ -473,8 +477,20 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
         }
         let s = p.step(&step)?;
         rounds::keep(&dir, &step, s.round, &s.outputs)?;
-        Ok(json!(s))
-    })
+        // Last, so a refused submit queues nothing. A copy that can't be
+        // queued doesn't refuse the submit: the reply says why.
+        if let Some(s) = p.steps.iter_mut().find(|s| s.id == step) {
+            proxy_jobs = crate::proxy::queue_all(&dir, &mut s.outputs, &need, &mut warnings);
+        }
+        Ok(json!(p.step(&step)?))
+    })?;
+    if !proxy_jobs.is_empty() {
+        v["proxy_jobs"] = proxy_jobs.into();
+    }
+    if !warnings.is_empty() {
+        v["warnings"] = warnings.into();
+    }
+    Ok(v)
 }
 
 fn notes(a: &Args, _: Via) -> Result<Value> {

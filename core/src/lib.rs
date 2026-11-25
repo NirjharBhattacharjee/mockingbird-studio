@@ -6,6 +6,7 @@ pub mod mcp;
 pub mod mockingbird;
 pub mod ops;
 pub mod project;
+pub mod proxy;
 pub mod rounds;
 pub mod setup;
 pub mod sheet;

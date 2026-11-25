@@ -200,7 +200,7 @@ fn check_out(name: &str, v: &str, cwd: Option<&Path>) -> Result<()> {
 /// The command with each `{name}` replaced by its value. Every placeholder
 /// needs a value and every value a placeholder. A value fills its place in
 /// one argument and never goes through a shell.
-fn fill(
+pub(crate) fn fill(
     command: &[String],
     values: &BTreeMap<String, String>,
     cwd: Option<&Path>,
@@ -342,7 +342,9 @@ pub fn start_mockingbird(
     )
 }
 
-fn queue(
+/// Writes a job as queued, its command already filled and checked, and
+/// makes sure a runner is up.
+pub(crate) fn queue(
     kind: &str,
     tool: &str,
     command: Vec<String>,
@@ -591,6 +593,18 @@ fn finish(r: &mut Running, status: std::io::Result<ExitStatus>) {
             job.error = Some(format!("can't wait for it: {e}"));
         }
     }
+    discard_partial(job);
+}
+
+/// A proxy job that didn't finish leaves half a copy. It's removed, so the
+/// window never plays it and the next submit makes a new one.
+fn discard_partial(job: &Job) {
+    if job.kind == "proxy"
+        && job.state != JobState::Done
+        && let Some(out) = job.values.get("out")
+    {
+        let _ = fs::remove_file(job.cwd().join(out));
+    }
 }
 
 /// Runs jobs until there's been nothing to do for `IDLE`.
@@ -605,6 +619,7 @@ fn serve() {
             job.state = JobState::Failed;
             job.error = Some("interrupted".into());
             job.ended = Some(Timestamp::now());
+            discard_partial(&job);
             keep(&job);
         }
     }
@@ -756,6 +771,31 @@ mod tests {
         }
         for bad in ["up/a.wav", "up/x/y.wav", "dangling", "dangling/a.wav"] {
             assert!(check_out("out", bad, Some(&cwd)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_proxy_that_didnt_finish_leaves_no_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = dir.path().join("a.mp4");
+        let job = |kind: &str, state: &str| -> Job {
+            toml::from_str(&format!(
+                "id = \"x\"\nkind = \"{kind}\"\ntool = \"ffmpeg\"\ncommand = []\n\
+                 project = {:?}\nstate = \"{state}\"\ncreated = \"2026-11-25T09:00:00Z\"\n\
+                 values = {{ out = \"a.mp4\" }}\n",
+                dir.path()
+            ))
+            .unwrap()
+        };
+        for (kind, state, kept) in [
+            ("proxy", "done", true),
+            ("tool", "failed", true),
+            ("proxy", "failed", false),
+            ("proxy", "cancelled", false),
+        ] {
+            fs::write(&copy, "half").unwrap();
+            discard_partial(&job(kind, state));
+            assert_eq!(copy.exists(), kept, "{kind} {state}");
         }
     }
 
