@@ -2024,9 +2024,11 @@ dependencies = [
 name = "mockingbird-studio"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "studio-core",
  "tauri",
  "tauri-build",
+ "tempfile",
 ]
 
 [[package]]

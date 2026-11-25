@@ -4,8 +4,14 @@ const BIN: &str = env!("CARGO_BIN_EXE_mockingbird-studio");
 
 #[test]
 fn mcp_exits_with_empty_stdout() {
+    // stdin is closed at once, so the server exits before any handshake.
     let out = Command::new(BIN).arg("mcp").output().unwrap();
     assert!(out.status.success());
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         out.stdout.is_empty(),
         "stdout is for protocol messages only"

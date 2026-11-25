@@ -65,7 +65,11 @@ pub const OPS: &[Op] = &[
         name: "project_new",
         help: "Make a project folder with its step folders and project.toml, and add it to the list.",
         args: &[
-            req("dir", Text, "The folder to make the project in."),
+            req(
+                "dir",
+                Text,
+                "An absolute path to the folder to make the project in.",
+            ),
             req("title", Text, "The video's working title."),
             opt("niche", Text, "The niche this video belongs to."),
             opt(
