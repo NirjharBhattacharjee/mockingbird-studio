@@ -9,6 +9,8 @@ use std::process::Command;
 
 use common::{BIN, Client};
 use serde_json::{Value, json};
+use studio_core::project::{Project, Verdict, Via};
+use studio_core::store;
 
 /// The person's side: one CLI call, expected to succeed, with its JSON.
 fn person(home: &Path, args: &[&str]) -> Value {
@@ -102,10 +104,7 @@ fn the_notes_loop_end_to_end() {
         .collect();
     assert_eq!(texts, ["cut the intro", "name the source"]);
     assert_eq!(notes["redo"][0]["note"], "two notes");
-    assert!(
-        line.contains("loop/script (redo)") || line.contains("script (redo)"),
-        "{line}"
-    );
+    assert!(line.contains("video/script (redo)"), "{line}");
     assert!(line.starts_with("Open notes: 2."), "{line}");
     fs::write(dir.join("script/script.md"), "Draft two.").unwrap();
     agent.call("submit", with(script));
@@ -120,19 +119,16 @@ fn the_notes_loop_end_to_end() {
         home.path(),
         &["approve", "--project", p, "--step", "script"],
     );
-    let toml = fs::read_to_string(dir.join("project.toml")).unwrap();
-    let script_decisions: Vec<&str> = toml
-        .split("[[decision]]")
-        .skip(1)
-        .filter(|d| d.contains("step = \"script\""))
+    // `at` is a Timestamp, so reading the file proves each decision has one.
+    let project: Project = store::read(&dir.join("project.toml")).unwrap();
+    let script: Vec<_> = project
+        .decisions
+        .iter()
+        .filter(|d| d.step == "script")
         .collect();
-    assert_eq!(script_decisions.len(), 2, "{toml}");
-    assert!(script_decisions[0].contains("redo"), "{toml}");
-    assert!(script_decisions[1].contains("approved"), "{toml}");
-    assert!(
-        script_decisions.iter().all(|d| d.contains("at = ")),
-        "{toml}"
-    );
+    let verdicts: Vec<Verdict> = script.iter().map(|d| d.decision).collect();
+    assert_eq!(verdicts, [Verdict::Redo, Verdict::Approved]);
+    assert!(script.iter().all(|d| d.via == Via::Cli));
 
     // 5. The agent submits a clip to previews. The person adds a note at 0:04
     // and the agent reads it with its time. The steps before previews are

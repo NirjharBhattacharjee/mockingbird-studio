@@ -125,8 +125,9 @@ loop: the command line is you, and `mockingbird-studio mcp` is what your
 agent calls (see [docs/CLAUDE_DESKTOP.md](./docs/CLAUDE_DESKTOP.md)).
 
 ```sh
+rm -rf /tmp/video /tmp/studio-home
 cargo build --release
-alias studio=target/release/mockingbird-studio
+alias studio="$PWD/target/release/mockingbird-studio"
 export MOCKINGBIRD_STUDIO_HOME=/tmp/studio-home   # keeps the try-out apart from your projects
 
 studio project-new --dir /tmp/video --title Example
@@ -140,6 +141,7 @@ studio submit --project /tmp/video --step research --files research/topic.md
 studio approve --project /tmp/video --step research
 grep -A5 decision /tmp/video/project.toml  # both decisions, with their times
 studio                                     # the window: the same project, the same buttons
+unset MOCKINGBIRD_STUDIO_HOME
 ```
 
 The same steps run headless in `cargo test --test loop`, with the MCP server
