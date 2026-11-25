@@ -530,7 +530,11 @@ without it the runner looks on its `PATH`.
   length. A file WebKit can't play gets a `proxy` job that writes an H.264
   and AAC copy, 720p at most, to `.studio/proxies/`. The window plays the
   copy and says so. The original is never touched and the copy never goes
-  into a film.
+  into a film. The output records `duration` and, when there's a copy,
+  `proxy`, its path. ffmpeg and ffprobe come from `ffmpeg = "…"` and
+  `ffprobe = "…"` in `config.toml` (absolute paths), or else from
+  `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin` or `/usr/bin`.
+  Without ffprobe, submit records no lengths and works as before.
 - A timeline isn't a new entity. It's a step's outputs in order, each as
   wide as its length, with its segments as ticks and its notes as pins. The
   agent passes the segments with `submit`, since it wrote the shot list.

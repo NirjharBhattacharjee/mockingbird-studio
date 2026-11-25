@@ -200,7 +200,7 @@ fn check_out(name: &str, v: &str, cwd: Option<&Path>) -> Result<()> {
 /// The command with each `{name}` replaced by its value. Every placeholder
 /// needs a value and every value a placeholder. A value fills its place in
 /// one argument and never goes through a shell.
-fn fill(
+pub(crate) fn fill(
     command: &[String],
     values: &BTreeMap<String, String>,
     cwd: Option<&Path>,
@@ -342,7 +342,9 @@ pub fn start_mockingbird(
     )
 }
 
-fn queue(
+/// Writes a job as queued, its command already filled and checked, and
+/// makes sure a runner is up.
+pub(crate) fn queue(
     kind: &str,
     tool: &str,
     command: Vec<String>,
