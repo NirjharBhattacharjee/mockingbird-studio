@@ -7,10 +7,13 @@ an agent (Claude Desktop is the one I use). The agent does the work through
 this app's. The app keeps the state, shows every preview, holds the render
 jobs, and waits for your yes at each step.
 
-Nothing is built yet. This README is the plan, written after doing the whole
-pipeline by hand once, on 24 November 2026. What gets built first, and in
-what order, is in [docs/](./docs/): the [PRD](./docs/PRD.md), the
-[design](./docs/DESIGN.md) and the [tasks](./docs/PLAN.md).
+Only the first slice is built: projects, the gate on each step, notes, and
+Approve or Redo, from the window, the command line and the MCP server. Jobs,
+preview copies and the YouTube upload come later. The rest of this README is
+the plan, written after doing the whole pipeline by hand once, on 24 November
+2026. What gets built first, and in what order, is in [docs/](./docs/): the
+[PRD](./docs/PRD.md), the [design](./docs/DESIGN.md) and the
+[tasks](./docs/PLAN.md).
 
 > The Claude Code plugin that used to live here moved into mockingbird's repo
 > as [`plugin/`](https://github.com/NirjharBhattacharjee/mockingbird/tree/main/plugin).
@@ -114,6 +117,35 @@ client you use, so nothing here is tied to Claude.
 a window. The window is plain HTML and JavaScript in the system's WebKit, not
 a bundled browser. Voice, score and research
 tools stay as they are and run as subprocesses.
+
+## Try it
+
+Needs a Rust toolchain on a Mac. Build once, then play both sides of the
+loop: the command line is you, and `mockingbird-studio mcp` is what your
+agent calls (see [docs/CLAUDE_DESKTOP.md](./docs/CLAUDE_DESKTOP.md)).
+
+```sh
+rm -rf /tmp/video /tmp/studio-home
+cargo build --release
+alias studio="$PWD/target/release/mockingbird-studio"
+export MOCKINGBIRD_STUDIO_HOME=/tmp/studio-home   # keeps the try-out apart from your projects
+
+studio project-new --dir /tmp/video --title Example
+echo "a topic" > /tmp/video/research/topic.md
+studio submit --project /tmp/video --step research --files research/topic.md
+studio note-add --project /tmp/video --step research --text "name a second source"
+studio redo --project /tmp/video --step research --note "one note"
+studio notes --project /tmp/video          # what the agent reads
+studio note-done --project /tmp/video --id 1 --reply "added"
+studio submit --project /tmp/video --step research --files research/topic.md
+studio approve --project /tmp/video --step research
+grep -A5 decision /tmp/video/project.toml  # both decisions, with their times
+studio                                     # the window: the same project, the same buttons
+unset MOCKINGBIRD_STUDIO_HOME
+```
+
+The same steps run headless in `cargo test --test loop`, with the MCP server
+as the agent.
 
 ## What it won't do
 
