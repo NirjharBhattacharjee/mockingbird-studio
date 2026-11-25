@@ -1,14 +1,16 @@
 # mockingbird-studio
 
 A local app that runs a video channel's pipeline, from a morning scan of the
-news to a finished film, its shorts and the upload sheet. You talk to an agent
-(Claude Desktop is the one I use). The agent does the work through
+news to a finished film and its shorts on your YouTube channel. You talk to
+an agent (Claude Desktop is the one I use). The agent does the work through
 [mockingbird](https://github.com/NirjharBhattacharjee/mockingbird)'s tools and
 this app's. The app keeps the state, shows every preview, holds the render
 jobs, and waits for your yes at each step.
 
 Nothing is built yet. This README is the plan, written after doing the whole
-pipeline by hand once, on 24 November 2026.
+pipeline by hand once, on 24 November 2026. What gets built first, and in
+what order, is in [docs/](./docs/): the [PRD](./docs/PRD.md), the
+[design](./docs/DESIGN.md) and the [tasks](./docs/PLAN.md).
 
 > The Claude Code plugin that used to live here moved into mockingbird's repo
 > as [`plugin/`](https://github.com/NirjharBhattacharjee/mockingbird/tree/main/plugin).
@@ -70,7 +72,8 @@ The output was good. Getting there was a mess.
           (state, previews,    (transcribe, look,
            jobs, approvals)     motion, render, measure)
                   │
-                  └──▶ the app window: every step, every preview, approve or redo
+                  ├──▶ the app window: every step, every preview, approve or redo
+                  └──▶ YouTube: the film, its description and thumbnail, after your yes
 ```
 
 **One folder per video, one layout.** `project.toml` records each step's
@@ -78,9 +81,9 @@ state, its files and who approved what, when. A new session asks the app
 where things stand instead of reading transcripts.
 
 **Steps are gates.** Research, script, voice, look, sound, assets, previews,
-shorts, film, upload. A step that needs your yes stops until it has one. You
-approve or ask for a redo, with a note, in the app window. The agent picks up the
-note through the app's MCP tools.
+shorts, film, thumbnail, description, upload. A step that needs your yes
+stops until it has one. You approve or ask for a redo, with a note, in the
+app window. The agent picks up the note through the app's MCP tools.
 
 **Previews in one place.** Audio players for voice and mix, the mood boards
 side by side, contact sheets and MP4s for every render, the script with its
@@ -88,6 +91,16 @@ changes. Every clip is converted to something the window can play.
 
 **The app owns the render queue.** It starts mockingbird renders itself, so
 they keep going when a chat ends, and it can run two at a time.
+
+**It posts to YouTube after your yes.** You sign in to your own Google
+account once, and the token stays in the Keychain on your Mac. Every video
+has a thumbnail step and a description step (title, description, tags,
+chapters). The agent makes both and you approve them like anything else.
+When you approve the upload step, the app uploads the film to your channel
+with its description and thumbnail. Each niche says whether its videos go up
+private, unlisted or public, and private is the default. Google keeps
+uploads private until the API project you made has passed its audit, so
+until then you press Publish in YouTube Studio yourself.
 
 **The morning scan runs on its own.** At a time you set, the app pulls the
 feeds and asks an agent from the command line (`claude -p` today, any CLI you
@@ -105,9 +118,13 @@ tools stay as they are and run as subprocesses.
 ## What it won't do
 
 - Render video. mockingbird does that.
-- Upload anything for you. The upload sheet is for you to paste.
-- Go online except for what you asked for: the feeds you listed, and assets
-  you approved for download.
+- Post anything without your yes. An upload starts only after you approve
+  the upload step.
+- Go online except for what you asked for: the feeds you listed, assets you
+  approved for download, and the upload to your own channel that you
+  approved.
+- Ask for an account. The only sign-in is to your own Google account, for
+  posting, and everything else works without it.
 
 ## License
 
