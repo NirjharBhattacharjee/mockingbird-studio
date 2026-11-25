@@ -30,8 +30,11 @@ fn build() -> Command {
                 .long(a.name)
                 .help(a.help)
                 .required(a.required);
-            if a.kind == ArgKind::TextList {
-                arg = arg.action(ArgAction::Append);
+            match a.kind {
+                ArgKind::TextList => arg = arg.action(ArgAction::Append).num_args(1..),
+                // So a note like "- fix the intro" isn't read as a flag.
+                ArgKind::Text => arg = arg.allow_hyphen_values(true),
+                _ => {}
             }
             cmd = cmd.arg(arg);
         }
@@ -47,11 +50,8 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(m) => m,
         Err(e) => {
             let _ = e.print();
-            return if e.use_stderr() {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            };
+            // 2 for a usage error, 0 for --help.
+            return ExitCode::from(e.exit_code() as u8);
         }
     };
     let (cmd, m) = matches.subcommand().expect("a command is required");
@@ -67,9 +67,13 @@ pub fn run(args: &[String]) -> ExitCode {
                 .map(|v| Value::from(v.cloned().collect::<Vec<_>>())),
             ArgKind::Text => m.get_one::<String>(a.name).map(|s| Value::from(s.as_str())),
             // Parsed here, not by clap, so a bad number is the dispatch error.
-            ArgKind::Number | ArgKind::Integer => m.get_one::<String>(a.name).map(|s| {
-                s.parse::<serde_json::Number>()
-                    .map_or_else(|_| Value::from(s.as_str()), Value::Number)
+            ArgKind::Integer => m.get_one::<String>(a.name).map(|s| {
+                s.parse::<u64>()
+                    .map_or_else(|_| Value::from(s.as_str()), Value::from)
+            }),
+            ArgKind::Number => m.get_one::<String>(a.name).map(|s| {
+                s.parse::<f64>()
+                    .map_or_else(|_| Value::from(s.as_str()), Value::from)
             }),
         };
         if let Some(v) = value {

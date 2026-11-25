@@ -28,10 +28,11 @@ fn the_notes_loop_runs_from_the_command_line() {
     let _ = fs::remove_dir_all(&root);
     let home = root.join("home");
     let dir = root.join("video");
-    let (d, p) = (dir.to_str().unwrap(), dir.to_str().unwrap());
+    let p = dir.to_str().unwrap();
 
-    ok(&home, &["project-new", "--dir", d, "--title", "Example"]);
+    ok(&home, &["project-new", "--dir", p, "--title", "Example"]);
     fs::write(dir.join("research/notes.md"), "facts").unwrap();
+    fs::write(dir.join("research/more.md"), "more").unwrap();
     let toml = || fs::read_to_string(dir.join("project.toml")).unwrap();
 
     ok(
@@ -44,9 +45,10 @@ fn the_notes_loop_runs_from_the_command_line() {
             "research",
             "--files",
             "research/notes.md",
+            "research/more.md",
         ],
     );
-    assert!(toml().contains("review"));
+    assert!(toml().contains(r#"state = "review""#));
 
     let note = ok(
         &home,
@@ -57,7 +59,7 @@ fn the_notes_loop_runs_from_the_command_line() {
             "--step",
             "research",
             "--text",
-            "cite the source",
+            "- cite the source",
         ],
     );
     assert!(note.contains("cite the source"));
@@ -73,7 +75,7 @@ fn the_notes_loop_runs_from_the_command_line() {
             "add sources",
         ],
     );
-    assert!(toml().contains("redo"));
+    assert!(toml().contains(r#"state = "redo""#));
 
     let notes = ok(&home, &["notes", "--project", p]);
     assert!(notes.contains("cite the source") && notes.contains("add sources"));
@@ -98,7 +100,7 @@ fn the_notes_loop_runs_from_the_command_line() {
     ok(&home, &["approve", "--project", p, "--step", "research"]);
     let toml = toml();
     assert!(
-        toml.contains("approved") && toml.contains(r#"via = "cli""#),
+        toml.contains(r#"state = "approved""#) && toml.contains(r#"via = "cli""#),
         "{toml}"
     );
 }
@@ -107,7 +109,13 @@ fn the_notes_loop_runs_from_the_command_line() {
 fn errors_go_to_stderr_with_a_failure_status() {
     let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-errors");
     let out = run(&home, &["status", "--project", "/no/such/project"]);
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no project"));
+}
+
+#[test]
+fn a_usage_error_exits_with_2() {
+    let home = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-usage");
+    assert_eq!(run(&home, &["status"]).status.code(), Some(2));
 }
