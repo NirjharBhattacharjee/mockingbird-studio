@@ -286,7 +286,11 @@ visibility_set = "private"   # what Google's reply said
 thumbnail = "set"            # set | refused | failed
 ```
 
-Times are RFC 3339 with an offset. `decision` and `post` rows are never
+Times are RFC 3339 with an offset, written as quoted strings
+(`created = "2026-11-25T09:00:00Z"`) so they come out as plain strings in
+JSON too. Reading also takes a bare TOML datetime. Keys the app doesn't
+know, at any level, are kept when it writes the file, and it won't change a
+file whose `schema` is newer than its own. `decision` and `post` rows are never
 edited or removed, so the file is the record AGENTS.md asks for: every
 approval with its time, and everything that was posted because of one.
 
@@ -320,6 +324,11 @@ Rules:
 - `approve` works only from `review`. `redo` needs a note.
 - Submitting to an approved step puts it back in `review`. A new round needs
   a new yes.
+- When a step is sent back for a redo, or an approved step is submitted
+  again, every step that comes after it (through `after`, directly or not)
+  and is past `todo` moves to `redo`. Each gets a `redo` decision whose note
+  names the step that caused it, with the same `via`. Work built on the old
+  version has to be looked at again.
 
 ### The built-in workflow
 
