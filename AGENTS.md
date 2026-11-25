@@ -25,9 +25,16 @@ and say so. Don't implement it quietly.
 
 - No LLM calls from the app. The agent is the user's MCP client. The morning
   scan runs a CLI the user configures.
-- No paywall, usage cap, account, login, licence key or telemetry.
-- Network only for what the user asked for: the feeds they listed and
-  downloads they approved. mockingbird itself stays offline.
+- No paywall, usage cap, licence key or telemetry. The app has no account of
+  its own. The one sign-in is to the user's own Google account, used only to
+  post to their YouTube channel, and everything else works without it.
+- Network only for what the user asked for: the feeds they listed, downloads
+  they approved, and the YouTube upload they approved (Google's token
+  address and YouTube's API, nothing else). mockingbird itself stays offline.
+- Nothing is posted without an approval of the upload step in
+  `project.toml`. A video goes up private unless the niche says otherwise.
+- The Google token stays in the macOS Keychain. It never goes into a project
+  folder, a config file, a log or a tool's reply.
 - Tauri is the only GUI. No Electron, no bundled browser, no other toolkit.
 - Never open mockingbird's `data.db`. Talk to mockingbird through its MCP
   server or CLI.

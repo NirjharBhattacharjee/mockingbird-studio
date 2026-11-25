@@ -1,6 +1,7 @@
 # Design: the first build
 
-Status: draft, waiting for the owner's approval. Written 25 November 2026.
+Status: draft, waiting for the owner's approval. Written 25 November 2026,
+and revised the same day after the owner's decisions.
 
 [PRD.md](./PRD.md) says what gets built and why. This says how. M1 is
 designed in full. M2 to M5 are designed far enough that M1's files don't have
@@ -8,8 +9,9 @@ to change shape later.
 
 ## The shape
 
-There's no daemon, no database, no socket and no port. The state is files.
-Every way in runs the same operations from one Rust library.
+There's no daemon, no database and no socket. The state is files. Every way
+in runs the same operations from one Rust library. The only port the app
+ever opens is on 127.0.0.1, for the minutes a Google sign-in takes.
 
 ```
 Claude Desktop ──stdio──▶ mockingbird-studio mcp ───┐
@@ -18,7 +20,8 @@ the window (Tauri) ─────▶ invoke("op", …) ────────
 launchd, at scan time ──▶ mockingbird-studio scan ──┤           ~/.mockingbird-studio/
                           mockingbird-studio runner ┘
                             │  (detached, lives while there are jobs)
-                            └─▶ mockingbird mcp · ffmpeg · the tools you declared
+                            ├─▶ mockingbird mcp · ffmpeg · the tools you declared
+                            └─▶ YouTube's API, for an upload you approved
 ```
 
 Why files and no daemon:
@@ -41,7 +44,8 @@ and not before.
 
 | Word | Means |
 |---|---|
-| Niche | A subject you make videos about: a name, the feeds you listed, a default workflow. |
+| Niche | A subject you make videos about: a name, the feeds you listed, a default workflow, a visibility, and the channel it posts to. |
+| Channel | A YouTube channel you signed in to, known to the app by a label. |
 | Feed | One RSS or Atom address you typed in. |
 | Scan | One pull of a niche's feeds. |
 | Item | One entry from a feed: title, link, date. |
@@ -53,7 +57,8 @@ and not before.
 | Segment | A named stretch of an audio or video output, such as a chapter or a shot. |
 | Note | Something you wrote about a step, a file, or a moment in a file. |
 | Decision | Your approve or redo on one round of a step. |
-| Job | A long task the app runs for you: a render, a preview copy, a declared tool. |
+| Job | A long task the app runs for you: a render, a preview copy, a declared tool, an upload. |
+| Post | One video on YouTube that came from a project: its id, link and what Google did with it. |
 
 ## Entities
 
@@ -75,11 +80,29 @@ erDiagram
     OUTPUT |o--o{ NOTE : "is pinned by"
     PROJECT |o--o{ JOB : queues
     STEP |o--o{ JOB : "is built by"
+    NICHE }o--o| CHANNEL : "posts to"
+    PROJECT ||--o{ POST : "is posted as"
+    JOB ||--o| POST : makes
 
     NICHE {
         string id PK
         string name
         string workflow
+        string visibility
+        string channel FK
+    }
+    CHANNEL {
+        string label PK
+        string id
+        string title
+    }
+    POST {
+        string video PK
+        string step FK
+        datetime at
+        string visibility_asked
+        string visibility_set
+        string thumbnail
     }
     FEED {
         string url PK
@@ -159,9 +182,12 @@ erDiagram
 | Project, Step, Output, Segment, Note, Decision | `<project>/project.toml` | any process, under the lock | M1 |
 | The list of project folders | `~/.mockingbird-studio/config.toml` | any process, under the lock | M1 |
 | Job | `~/.mockingbird-studio/jobs/<id>/job.toml` and `log.txt` | the caller creates it, then only the runner | M2 |
-| Niche, Feed, settings, declared tools | `~/.mockingbird-studio/config.toml` | any process, under the lock | M3 (tools in M2) |
-| Scan, Item, Topic | `~/.mockingbird-studio/scans/<niche>/<day>.json` | the scan | M3 |
-| Workflow | built in, or `~/.mockingbird-studio/workflows/<name>.toml` | you | M4 |
+| Declared tools | `~/.mockingbird-studio/config.toml` | you | M2 |
+| Niche, Feed, Channel | `~/.mockingbird-studio/config.toml` | any process, under the lock | M3 |
+| The Google token | the macOS Keychain | the sign-in | M3 |
+| Post | `<project>/project.toml` | the upload job, under the lock | M3 |
+| Scan, Item, Topic | `~/.mockingbird-studio/scans/<niche>/<day>.json` | the scan | M4 |
+| Workflow | built in, or `~/.mockingbird-studio/workflows/<name>.toml` | you | M5 |
 
 `MOCKINGBIRD_STUDIO_HOME` moves `~/.mockingbird-studio`. Tests set it to a
 temp folder.
@@ -174,7 +200,8 @@ hand don't survive the next write.
 ```
 <project>/
   project.toml
-  research/ script/ voice/ look/ sound/ assets/ previews/ shorts/ film/ upload/
+  research/ script/ voice/ look/ sound/ assets/ previews/ shorts/ film/
+  thumbnail/ description/ upload/
   .studio/        the app's own files: preview copies and text rounds, from M2
 ```
 
@@ -245,11 +272,23 @@ created = 2026-11-25T11:02:00Z
 round = 1
 state = "done"
 reply = "Cut to 2.5 s in round 2."
+
+[[post]]                     # from M3
+step = "upload"
+round = 1
+at = 2026-11-25T18:30:00Z
+job = "20261125-182512-7f3a"
+video = "VIDEO_ID"
+url = "https://youtu.be/VIDEO_ID"
+channel = "main"
+visibility_asked = "public"
+visibility_set = "private"   # what Google's reply said
+thumbnail = "set"            # set | refused | failed
 ```
 
-Times are RFC 3339 with an offset. `decision` rows are never edited or
-removed, so the file is the record AGENTS.md asks for: every approval, with
-its time.
+Times are RFC 3339 with an offset. `decision` and `post` rows are never
+edited or removed, so the file is the record AGENTS.md asks for: every
+approval with its time, and everything that was posted because of one.
 
 A step's `output` list is the current round's. Older rounds stay in
 `decision` and `note`. Keeping old text so the window can show what changed
@@ -284,7 +323,7 @@ Rules:
 
 ### The built-in workflow
 
-`explainer`, taken from the README's ten steps and the 24 November run. The
+`explainer`, taken from the README's steps and the 24 November run. The
 gates and the order are a first guess for the owner to correct.
 
 | Step | Gate | After |
@@ -298,9 +337,14 @@ gates and the order are a first guess for the owner to correct.
 | previews | yes | voice, look, assets |
 | shorts | yes | previews |
 | film | yes | previews, sound |
-| upload | yes | film |
+| thumbnail | yes | look |
+| description | yes | film |
+| upload | yes, and approving it posts | film, thumbnail, description |
 
 Voice, look and assets can run at the same time, as they did on the day.
+The description waits for the film because its chapters need the film's
+final times. In M1 and M2 `upload` is a gate like any other. From M3,
+approving it posts (see [Publishing](#publishing-m3)).
 
 ## Operations
 
@@ -329,9 +373,10 @@ M1:
 Each layer sets `via` itself. A caller can't pass it, so an MCP client can't
 record a decision as coming from the window.
 
-Later: `job_start`, `jobs`, `job`, `job_cancel` (M2); `niche_add`,
-`niche_remove`, `feed_add`, `feed_remove`, `niches`, `scan`, `topics`,
-`topics_set`, `topic_pick`, `scan_time` (M3); `workflows` (M4).
+Later: `job_start`, `jobs`, `job`, `job_cancel` (M2); `niches`, `niche_add`,
+`niche_set`, `niche_remove`, `feed_add`, `feed_remove`, `youtube_connect`,
+`youtube_status`, `youtube_disconnect` (M3); `scan`, `topics`, `topics_set`,
+`topic_pick`, `scan_time` (M4); `workflows` (M5).
 
 ### CLI
 
@@ -433,6 +478,7 @@ Kinds:
 | `mockingbird` | Starts `mockingbird mcp`, calls one tool (`motion`, `render`, `look`) over stdio and waits. One process per job. See D6. |
 | `tool` | A tool declared in `config.toml`, such as the voice or score script, with explicit arguments. |
 | `proxy` | `ffmpeg`, to make a preview copy. See D4. |
+| `youtube` | The upload, from M3. See [Publishing](#publishing-m3). |
 
 A `tool` job runs only what you declared:
 
@@ -457,7 +503,150 @@ its placeholders, never a command.
   agent passes the segments with `submit`, since it wrote the shot list.
   Clicking the strip seeks.
 
-## The scan (M3)
+## Publishing (M3)
+
+Three steps end the workflow: `thumbnail`, `description` and `upload`. They
+are ordinary steps with previews, notes and decisions. M3 adds what's
+particular to them. The app calls no model for any of it. The agent writes
+the sheet and makes the image.
+
+### Niche settings and channels
+
+```toml
+[[niche]]
+id = "ai-news"
+name = "AI news"
+workflow = "explainer"
+visibility = "private"       # private | unlisted | public
+channel = "main"
+
+[[channel]]
+label = "main"
+id = "UC…"                   # filled in from the first upload's reply
+title = "…"
+```
+
+`visibility` is private unless you change it. A project with no niche posts
+private, to the channel if there is exactly one.
+
+### The description sheet
+
+The description step's output is `description/sheet.toml`:
+
+```toml
+title = "Example video"
+description = """
+What the video is about, in two or three lines.
+
+Sources: …
+"""
+tags = ["example", "explainer"]
+category = 28
+made_for_kids = false
+altered_content = false
+
+[[chapter]]
+at = 0
+title = "Cold open"
+
+[[chapter]]
+at = 21
+title = "What happened"
+```
+
+- `submit` refuses a sheet YouTube would reject: a title over 100
+  characters, a description over 5,000 bytes with the chapter lines added,
+  tags over 500 characters in total, or `<` or `>` in either text. Chapters
+  have to start at 0, come in order, number at least three and last 10
+  seconds or more each. The task checks these numbers against YouTube's
+  reference when it's built.
+- The two declarations are ones YouTube asks an uploader for: whether the
+  video is made for kids, and whether it has altered or synthetic content
+  that looks real. They're on the sheet so you see them before you approve.
+- The window shows the sheet the way YouTube lays it out: the title, the
+  description with the chapter lines under it, then the tags, with a count
+  beside each and a copy button.
+- At upload the app joins the chapters to the description as lines like
+  `0:00 Cold open`. It changes nothing else.
+
+### The thumbnail
+
+The thumbnail step's output is one image, `thumbnail/thumbnail.png` or
+`.jpg`. The agent makes it with mockingbird's `motion` and `frames`.
+`submit` checks that it's 1280×720, PNG or JPEG, and under 2 MB. The window
+shows it full size, and at 168×94 beside the title, which is about how it
+looks in a feed.
+
+### Signing in
+
+- You make an OAuth client of type "Desktop app" in your own Google Cloud
+  project, turn on the YouTube Data API, and set the client to "In
+  production". `docs/YOUTUBE.md` will walk through it. The app ships no
+  client of its own (PRD F1).
+- `youtube_connect(label, client_file)` takes the JSON file Google gives you
+  for that client. It opens Google's consent page in your browser, with PKCE
+  and a redirect to a port on 127.0.0.1 that it listens on for up to five
+  minutes. It swaps the code for tokens and puts the refresh token and the
+  client's details in the Keychain under the label.
+- The only scope asked for is `youtube.upload`.
+- `youtube_status` lists the labels, whether each has a token, and the
+  channel's name once an upload has told the app what it is. The upload
+  scope can't ask Google for the name beforehand.
+- `youtube_disconnect(label)` revokes the token at Google and deletes it.
+- No operation returns a token. It isn't written to `config.toml`,
+  `project.toml`, a job file or a log. An access token lives only in the
+  memory of the job that's using it.
+
+### The upload step
+
+- The agent submits `upload` with one file: the video to post. `submit`
+  refuses anything but exactly one video.
+- `upload` comes after `film`, `thumbnail` and `description`, so it can't
+  be submitted until all three are approved.
+- Its review shows the film, the sheet, the thumbnail, the channel and the
+  visibility. The button says "Approve and post".
+- `approve` writes the decision first. Then, if the project has no post yet
+  and its channel is signed in, it queues a `youtube` job. Whichever layer
+  ran `approve` queues it, so it works with the window closed.
+- With no channel signed in, the step is approved and nothing is posted.
+  `status` says why. After you sign in, `job_start` with the `youtube` kind
+  posts it.
+- A decision with `via = "mcp"` posts private, whatever the niche says
+  (PRD F5).
+- A project that already has a post doesn't get a second one from a later
+  approval. `job_start` with `again = true` is how you ask for one.
+- `upload` is found by its step id. If a workflow ever needs two posting
+  steps, that becomes a field on the step.
+
+### The upload job
+
+1. Trade the refresh token for an access token at `oauth2.googleapis.com`.
+2. Open a resumable upload at `www.googleapis.com` with the title,
+   description, tags, category, declarations and visibility.
+3. Send the file in chunks. When a chunk fails, ask Google how much arrived
+   and carry on from there.
+4. Read the reply and write a `post` row to `project.toml` straight away:
+   the video's id and link, the channel, the visibility asked for and the
+   one Google set.
+5. Send the thumbnail with `thumbnails.set` and record whether it was set
+   or refused.
+
+Around those steps:
+
+- Those two hosts are the only ones the app talks to for posting. They're
+  two constants, and tests point them at a local server.
+- Google locks uploads from an unaudited API project to private. The job
+  doesn't treat that as a failure. It records it, and the window says the
+  video is up as private and why.
+- A refused thumbnail doesn't fail the job either. Custom thumbnails need a
+  verified channel, and `thumbnails.set` answers 403 without one. The video
+  is up, and the post row says the thumbnail was refused.
+- An expired sign-in or a spent quota fails the job with Google's message.
+  Nothing is retried on its own after that. You run it again.
+- A job that dies starts the upload over as a new job. Carrying a half-sent
+  upload across runs can come later, if films get big enough to need it.
+
+## The scan (M4)
 
 ```toml
 [scan]
@@ -489,9 +678,9 @@ feeds = ["https://example.com/feed.xml"]
 - The schedule is a launchd agent in `~/Library/LaunchAgents/` that runs
   `mockingbird-studio scan --all`. It's written when you set a time and
   removed when you clear it. launchd runs a missed time after the Mac wakes.
-- Parsing uses `feed-rs`; fetching uses a small blocking HTTP client.
+- Parsing uses `feed-rs`. Fetching uses the HTTP client M3 brought in.
 
-## Workflows (M4) and upload (M5)
+## Workflows (M5)
 
 - A workflow template is the `[[step]]` list from `project.toml` without the
   state. `explainer` and `short` are built in. Your own go in
@@ -500,20 +689,27 @@ feeds = ["https://example.com/feed.xml"]
 - `status` lists the steps that can be worked on now, which is every step
   whose `after` is satisfied. That replaces the brief written by hand for
   each pane.
-- The upload step's outputs are a sheet (title, description, chapters,
-  tags), the captions and the thumbnail. The window shows the sheet with a
-  copy button on each field. Posting waits on D1.
+- A project made with `short` is one short, and posts through its own
+  upload step like any project. Shorts cut inside a film's project get a
+  decision each, and then a post each, with their own title and description.
 
 ## Security and privacy
 
-- M1 and M2 make no network requests. M3 adds one kind: GET on the feed
-  addresses you listed.
-- No telemetry, no update check, no account.
+- M1 and M2 make no network requests. M3 adds posting: Google's token
+  address and YouTube's API, for an upload you approved, and nothing else.
+  M4 adds GET on the feed addresses you listed.
+- No telemetry and no update check. The app has no account of its own. The
+  one sign-in is to your own Google account, and everything but posting
+  works without it.
+- The Google token is in the Keychain. No operation returns it and nothing
+  logs it.
+- Nothing is posted before the upload step's approval is in `project.toml`.
+  An approval that came through MCP posts private.
 - The window loads nothing remote. Its content security policy allows the
   app's own files and the asset protocol.
 - The window can read files only inside the listed project folders.
 - Operations refuse paths outside the project folder.
-- Jobs run only mockingbird, ffmpeg and the tools you declared.
+- Jobs run only mockingbird, ffmpeg, the tools you declared and the upload.
 - The app never opens `~/.mockingbird/data.db`.
 
 ## Testing
@@ -522,6 +718,10 @@ feeds = ["https://example.com/feed.xml"]
   Fixtures are made in the test: text files, and a WAV written from code.
 - MCP tests start the binary and speak JSON-RPC over its stdio.
 - Tests that need ffmpeg or mockingbird are `#[ignore]`.
+- The upload job is tested against a small server the test starts, which
+  speaks enough of the resumable protocol. Tests take a token from the
+  environment, so they touch neither the Keychain nor Google. One upload to
+  a real test channel is done by hand, as evidence for the PR.
 - The window holds almost no logic. Its evidence is screenshots in the PR.
 
 ## Code layout
@@ -539,7 +739,8 @@ isn't named `core`, which is the name of Rust's own.
 
 Dependencies for M1: `tauri` (the stable 2.x line, not the 3.0 alpha
 crates.io also lists), `serde`, `toml`, `serde_json`, `clap`, `rmcp`, and
-one time crate. M3 adds `feed-rs` and an HTTP client.
+one time crate. M3 adds an HTTP client and Keychain access. M4 adds
+`feed-rs`.
 
 ## Left out on purpose
 
@@ -552,3 +753,7 @@ one time crate. M3 adds `feed-rs` and an HTTP client.
 | Pushing notes into a chat | never. `wait` is the nearest thing (PRD F3) |
 | Editing on the timeline | never. That's the agent and mockingbird |
 | An updater | never. It would be a network call nobody asked for |
+| Uploading captions | you accept the wider Google scope it needs |
+| A publish time, playlists | someone asks |
+| Carrying a half-sent upload across job runs | a film is big enough that starting over hurts |
+| A Google client shipped with the app | never, unless the project takes on its quota and audit |
