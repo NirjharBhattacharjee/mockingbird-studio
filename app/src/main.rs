@@ -24,9 +24,10 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The window's one command. Async so a waiting lock never blocks the UI.
+/// The window's one command: an operation from the core table, recorded as
+/// coming from the window.
 #[tauri::command]
-async fn op(app: AppHandle, name: String, args: Value) -> Result<Value, String> {
+fn op(app: AppHandle, name: String, args: Value) -> Result<Value, String> {
     let out = ops::dispatch(&name, &args, Via::Window)?;
     if matches!(name.as_str(), "projects" | "project_new" | "project_add") {
         allow_listed(&app);
@@ -43,8 +44,14 @@ fn allow_listed(app: &AppHandle) {
     };
     let scope = app.asset_protocol_scope();
     for dir in config.projects {
-        if let Err(e) = scope.allow_directory(&dir, true) {
-            eprintln!("can't allow {}: {e}", dir.display());
+        // The protocol canonicalizes each request, so the scope must be canonical too.
+        match dir.canonicalize() {
+            Ok(dir) => {
+                if let Err(e) = scope.allow_directory(&dir, true) {
+                    eprintln!("can't allow {}: {e}", dir.display());
+                }
+            }
+            Err(e) => eprintln!("can't allow {}: {e}", dir.display()),
         }
     }
 }

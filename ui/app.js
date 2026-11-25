@@ -20,6 +20,7 @@ let status = null;
 let shown = ""; // what the page last drew, to skip redraws that change nothing
 let previewKey = ""; // the file in the preview, so a refresh doesn't reload a playing video
 let pinned = null; // the player's time when `n` was pressed
+let asked = 0; // the latest refresh; an older reply is dropped
 
 const op = (name, args = {}) => invoke("op", { name, args });
 
@@ -43,12 +44,18 @@ const step = () => status?.steps.find((s) => s.id === sel.step);
 const media = () => $("preview").querySelector("audio, video");
 
 async function refresh() {
+  const n = ++asked;
   try {
-    ({ projects } = await op("projects"));
+    const list = (await op("projects")).projects;
+    if (n !== asked) return;
+    projects = list;
     if (!projects.some((p) => p.project === sel.project)) {
       Object.assign(sel, { project: projects.find((p) => !p.error)?.project ?? null, step: null });
     }
-    status = sel.project ? await op("status", { project: sel.project }) : null;
+    const project = sel.project;
+    const got = project ? await op("status", { project }) : null;
+    if (n !== asked || project !== sel.project) return;
+    status = got;
     if (status && !step()) {
       sel.step = (status.steps.find((s) => s.state === "review") ?? status.steps[0])?.id ?? null;
     }
@@ -56,6 +63,8 @@ async function refresh() {
     if (!outputs.some((o) => o.path === sel.file)) sel.file = outputs[0]?.path ?? null;
     showError();
   } catch (e) {
+    if (n !== asked) return;
+    status = null;
     showError(e);
   }
   draw();
@@ -131,25 +140,27 @@ function drawPreview(out, round) {
   const box = $("preview");
   box.replaceChildren();
   if (!out) return;
-  const src = convertFileSrc(`${sel.project}/${out.path}`);
+  // status.project is the canonical folder, which is what the scope allows.
+  const src = convertFileSrc(`${status.project}/${out.path}`);
+  const url = `${src}?r=${round}`; // a new round of the same file name isn't served from cache
   switch (out.kind) {
     case "text": {
       const pre = el("pre");
       box.append(pre);
-      fetch(src)
+      fetch(src, { cache: "no-store" })
         .then((r) => (r.ok ? r.text() : Promise.reject(`${out.path}: ${r.status}`)))
         .then((t) => (pre.textContent = t), showError);
       break;
     }
     case "image":
-      box.append(el("img", null, { src, alt: out.path }));
+      box.append(el("img", null, { src: url, alt: out.path }));
       break;
     case "audio":
     case "video":
-      box.append(el(out.kind, null, { src, controls: "", preload: "metadata" }));
+      box.append(el(out.kind, null, { src: url, controls: "", preload: "metadata" }));
       break;
     case "pdf":
-      box.append(el("embed", null, { src, type: "application/pdf" }));
+      box.append(el("embed", null, { src: url, type: "application/pdf" }));
       break;
     default:
       box.append(el("p", `No preview for ${out.path}.`));
@@ -177,6 +188,7 @@ function drawNotes() {
 
 function seek(note) {
   if (note.path && note.path !== sel.file) {
+    if (!step()?.output.some((o) => o.path === note.path)) return; // not in this round
     sel.file = note.path;
     draw();
   }
@@ -193,7 +205,9 @@ $("note-form").onsubmit = async (e) => {
   const m = media();
   const args = { project: sel.project, step: sel.step, text: $("note-text").value };
   if (sel.file) args.path = sel.file;
-  if (m) args.at = pinned ?? m.currentTime;
+  // A time only when it means something: pinned with `n`, or the player has played.
+  const at = pinned ?? (m?.played.length ? m.currentTime : null);
+  if (at != null) args.at = at;
   try {
     await op("note_add", args);
     $("note-text").value = "";
@@ -213,7 +227,10 @@ $("approve").onclick = async () => {
   }
 };
 
-$("redo").onclick = () => $("redo-dialog").showModal();
+$("redo").onclick = () => {
+  $("redo-dialog").returnValue = ""; // so Escape can't send the last round's "send"
+  $("redo-dialog").showModal();
+};
 $("redo-dialog").onclose = async () => {
   const dialog = $("redo-dialog");
   const note = $("redo-text").value;
@@ -230,7 +247,7 @@ $("redo-dialog").onclose = async () => {
 // Space plays and pauses; `n` pins a note at the player's current time.
 document.addEventListener("keydown", (e) => {
   const m = media();
-  const typing = e.target.closest("input, textarea, button, dialog");
+  const typing = e.target.closest("input, textarea, dialog");
   if (!m || typing || e.target === m || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === " ") {
     e.preventDefault();
@@ -243,6 +260,9 @@ document.addEventListener("keydown", (e) => {
     $("note-text").focus();
   }
 });
+
+// A clicked button gives up focus, so Space plays the video instead of clicking it again.
+document.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
 
 refresh();
 setInterval(() => document.hidden || refresh(), 2000);
