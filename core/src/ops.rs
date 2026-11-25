@@ -862,6 +862,34 @@ mod tests {
                 json!({"project": dir, "step": "description", "files": files}),
             )
         };
+        // The checks run after the gate check, so approve every step before it.
+        let steps = run("status", json!({"project": dir})).unwrap()["steps"].clone();
+        for s in steps.as_array().unwrap() {
+            let id = s["id"].as_str().unwrap();
+            if id == "description" {
+                break;
+            }
+            let file = if id == "thumbnail" {
+                // A PNG header that says 1280×720, which is all the check reads.
+                let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+                png.extend([0, 0, 5, 0, 0, 0, 2, 0xD0, 8, 2, 0, 0, 0]);
+                fs::write(root.join("thumbnail/a.png"), png).unwrap();
+                "thumbnail/a.png".to_string()
+            } else {
+                fs::write(root.join(format!("{id}.md")), "x").unwrap();
+                format!("{id}.md")
+            };
+            let files = json!([file]);
+            run(
+                "submit",
+                json!({"project": dir, "step": id, "files": files}),
+            )
+            .unwrap();
+            if s["gate"] == true {
+                run("approve", json!({"project": dir, "step": id})).unwrap();
+            }
+        }
+
         fs::write(root.join("description/notes.md"), "x").unwrap();
         let err = submit(json!(["description/notes.md"])).unwrap_err();
         assert!(err.contains("needs description/sheet.toml"), "{err}");
@@ -876,25 +904,7 @@ mod tests {
         let err = submit(json!([sheet::PATH])).unwrap_err();
         assert!(err.starts_with("title is 101 characters"), "{err}");
 
-        // A good sheet is taken once every step before it is approved.
         fs::write(root.join(sheet::PATH), good).unwrap();
-        let steps = run("status", json!({"project": dir})).unwrap()["steps"].clone();
-        for s in steps.as_array().unwrap() {
-            let id = s["id"].as_str().unwrap();
-            if id == "description" {
-                break;
-            }
-            fs::write(root.join(format!("{id}.md")), "x").unwrap();
-            let files = json!([format!("{id}.md")]);
-            run(
-                "submit",
-                json!({"project": dir, "step": id, "files": files}),
-            )
-            .unwrap();
-            if s["gate"] == true {
-                run("approve", json!({"project": dir, "step": id})).unwrap();
-            }
-        }
         submit(json!([sheet::PATH])).unwrap();
         let view = run("sheet", json!({"project": dir})).unwrap();
         assert_eq!(
