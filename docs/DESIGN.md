@@ -618,7 +618,7 @@ looks in a feed.
 
 - You make an OAuth client of type "Desktop app" in your own Google Cloud
   project, turn on the YouTube Data API, and set the client to "In
-  production". `docs/YOUTUBE.md` will walk through it. The app ships no
+  production". [docs/YOUTUBE.md](./YOUTUBE.md) walks through it. The app ships no
   client of its own (PRD F1).
 - `youtube_connect(label, client_file)` takes the JSON file Google gives you
   for that client. It opens Google's consent page in your browser, with PKCE
@@ -759,6 +759,11 @@ feeds = ["https://example.com/feed.xml"]
   speaks enough of the resumable protocol. Tests take a token from the
   environment, so they touch neither the Keychain nor Google. One upload to
   a real test channel is done by hand, as evidence for the PR.
+- The sign-in is tested against a fake Google the test starts. Three
+  variables make that possible: `MOCKINGBIRD_STUDIO_GOOGLE` points the consent,
+  token and revoke endpoints at it (an address on 127.0.0.1 only),
+  `MOCKINGBIRD_STUDIO_BROWSER` replaces `open`, and
+  `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps Keychain items in a folder.
 - The window holds almost no logic. Its evidence is screenshots in the PR.
 
 ## Code layout

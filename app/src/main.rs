@@ -28,8 +28,9 @@ fn main() -> ExitCode {
 }
 
 /// The window's one command: an operation from the core table, recorded as
-/// coming from the window.
-#[tauri::command]
+/// coming from the window. Off the main thread, so a sign-in waiting on the
+/// browser doesn't freeze the window.
+#[tauri::command(async)]
 fn op(app: AppHandle, name: String, args: Value) -> Result<Value, String> {
     let out = ops::dispatch(&name, &args, Via::Window)?;
     if matches!(name.as_str(), "projects" | "project_new" | "project_add") {

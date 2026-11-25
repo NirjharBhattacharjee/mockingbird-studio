@@ -15,10 +15,18 @@ pub struct Client {
 }
 
 impl Client {
+    // Not every test file that shares this module calls it.
+    #[allow(dead_code)]
     pub fn start(home: &std::path::Path) -> Client {
+        Client::start_env(home, &[])
+    }
+
+    /// Starts the server with extra environment variables.
+    pub fn start_env(home: &std::path::Path, env: &[(&str, &str)]) -> Client {
         let mut child = Command::new(BIN)
             .arg("mcp")
             .env("MOCKINGBIRD_STUDIO_HOME", home)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

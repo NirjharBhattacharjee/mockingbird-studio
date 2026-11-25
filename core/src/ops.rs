@@ -14,6 +14,7 @@ use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
 use crate::rounds;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
+use crate::youtube;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArgKind {
@@ -286,6 +287,35 @@ pub const OPS: &[Op] = &[
         help: "Remove a feed address from a niche.",
         args: &[NICHE, req("url", Text, "The address, as listed.")],
         run: |a, _| niche::feed_remove(a),
+    },
+    Op {
+        name: "youtube_connect",
+        help: "Sign in to your own YouTube channel. Opens Google's consent page in your browser and waits up to five minutes. Asks for the upload scope only. The refresh token goes in the macOS Keychain under the label, and no reply holds it.",
+        args: &[
+            req(
+                "label",
+                Text,
+                "The name the app knows the channel by, such as main.",
+            ),
+            req(
+                "client_file",
+                Text,
+                "An absolute path to the JSON file Google gave you for your Desktop app OAuth client (docs/YOUTUBE.md).",
+            ),
+        ],
+        run: |a, _| youtube::connect(&a.text("label"), &a.text("client_file")),
+    },
+    Op {
+        name: "youtube_status",
+        help: "Each channel's label, whether it's signed in, and its id and title once an upload has told the app.",
+        args: &[],
+        run: |_, _| youtube::status(),
+    },
+    Op {
+        name: "youtube_disconnect",
+        help: "Revoke a channel's token at Google and delete it from the Keychain.",
+        args: &[req("label", Text, "The channel's label.")],
+        run: |a, _| youtube::disconnect(&a.text("label")),
     },
 ];
 
@@ -773,7 +803,10 @@ mod tests {
                 "niche_set",
                 "niche_remove",
                 "feed_add",
-                "feed_remove"
+                "feed_remove",
+                "youtube_connect",
+                "youtube_status",
+                "youtube_disconnect"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
