@@ -13,6 +13,7 @@ tauri = { version = "2", features = ["protocol-asset"] }
 
 [dev-dependencies]
 tempfile = "3"
+jiff = "1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

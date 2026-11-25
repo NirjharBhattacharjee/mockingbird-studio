@@ -65,7 +65,7 @@ fn locked<R>(path: &Path, f: impl FnOnce() -> Result<R>) -> Result<R> {
     // The lock is released when `lock` is dropped.
 }
 
-fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let text =
         toml::to_string(value).map_err(|e| format!("can't write {}: {e}", path.display()))?;
     let mut tmp = path.as_os_str().to_owned();

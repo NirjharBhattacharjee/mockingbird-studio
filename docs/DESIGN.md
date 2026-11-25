@@ -500,6 +500,15 @@ Claude Desktop has no shell. A job that took any command line would hand
 one to every MCP client. So `job_start` takes a tool's name and values for
 its placeholders, never a command.
 
+`job_start` takes `values` as `name=value`, one per placeholder. A value
+fills one argument and never goes through a shell, and none may start with
+`-`. Placeholders named `out` or `out_*` are the files the tool writes:
+paths inside the folder the job runs in (the project's, or the job's own).
+Those that exist when it's done are the job's outputs. `jobs_at_once` in
+`config.toml` changes the two at a time. Give each command's program as an absolute
+path: the runner inherits whatever minimal `PATH` launched the caller, such
+as Claude Desktop's.
+
 ### Preview copies and the timeline
 
 - On `submit`, `ffprobe` reads each audio and video output's codec and

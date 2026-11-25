@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 
+use crate::jobs;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
 use crate::store::{self, PROJECT_FILE};
 
@@ -160,6 +161,52 @@ pub const OPS: &[Op] = &[
         help: "Send a step back with a note saying what to change.",
         args: &[PROJECT, STEP, req("note", Text, "What to change.")],
         run: redo,
+    },
+    Op {
+        name: "job_start",
+        help: "Queue a long job. It runs in a separate runner, two at a time, and keeps going after the chat or window that queued it closes. The kind tool runs a tool declared in config.toml with values for its placeholders, never a command line.",
+        args: &[
+            req("kind", Text, "The job's kind: tool."),
+            req(
+                "tool",
+                Text,
+                "The tool's name, from [tool.<name>] in config.toml.",
+            ),
+            opt(
+                "values",
+                TextList,
+                "name=value for each {placeholder} in the tool's command. out and out_* are the files it writes, relative to the folder it runs in.",
+            ),
+            opt(
+                "project",
+                Text,
+                "The project it's for. The job runs in its folder.",
+            ),
+            opt(
+                "step",
+                Text,
+                "The step it builds. Refused under the same rule as submit.",
+            ),
+        ],
+        run: job_start,
+    },
+    Op {
+        name: "jobs",
+        help: "Every job, oldest first, with its state.",
+        args: &[opt("project", Text, "Only this project's jobs.")],
+        run: jobs,
+    },
+    Op {
+        name: "job",
+        help: "One job and the end of its log.",
+        args: &[req("id", Text, "The job's id.")],
+        run: job,
+    },
+    Op {
+        name: "job_cancel",
+        help: "Stop a queued or running job: SIGTERM, then SIGKILL after 5 seconds.",
+        args: &[req("id", Text, "The job's id.")],
+        run: job_cancel,
     },
 ];
 
@@ -359,6 +406,8 @@ fn status_of(dir: &Path) -> Result<Value> {
         .iter()
         .filter(|n| n.state == NoteState::Open)
         .collect();
+    let jobs = jobs::list(Some(dir));
+    jobs::wake(&jobs);
     Ok(json!({
         "project": dir,
         "title": p.title,
@@ -367,6 +416,7 @@ fn status_of(dir: &Path) -> Result<Value> {
         "created": p.created,
         "steps": steps,
         "open_notes": open,
+        "jobs": jobs,
     }))
 }
 
@@ -466,6 +516,53 @@ fn redo(a: &Args, via: Via) -> Result<Value> {
     })
 }
 
+fn job_start(a: &Args, _: Via) -> Result<Value> {
+    if a.text("kind") != "tool" {
+        return Err(format!(
+            "no job kind {:?}; the kinds are: tool",
+            a.text("kind")
+        ));
+    }
+    let values = a
+        .list("values")
+        .into_iter()
+        .map(|kv| match kv.split_once('=') {
+            Some((k, v)) if !k.is_empty() => Ok((k.to_string(), v.to_string())),
+            _ => Err(format!("{kv:?} should be name=value")),
+        })
+        .collect::<Result<_>>()?;
+    let project = a.opt("project").map(|p| project_dir(&p)).transpose()?;
+    let step = a.opt("step");
+    if let Some(step) = &step {
+        let dir = project
+            .as_ref()
+            .ok_or("a job for a step needs its project")?;
+        store::read::<Project>(&dir.join(PROJECT_FILE))?.check_submit(step)?;
+    }
+    Ok(json!(jobs::start(&a.text("tool"), values, project, step)?))
+}
+
+fn jobs(a: &Args, _: Via) -> Result<Value> {
+    let project = a.opt("project").map(|p| project_dir(&p)).transpose()?;
+    let list = jobs::list(project.as_deref());
+    jobs::wake(&list);
+    Ok(json!({"jobs": list}))
+}
+
+fn job(a: &Args, _: Via) -> Result<Value> {
+    let id = a.text("id");
+    let j = jobs::read(&id)?;
+    jobs::wake(std::slice::from_ref(&j));
+    let mut v = json!(j);
+    v["log"] = jobs::log_tail(&id).into();
+    Ok(v)
+}
+
+fn job_cancel(a: &Args, _: Via) -> Result<Value> {
+    jobs::cancel(&a.text("id"))?;
+    Ok(json!({"id": a.text("id"), "cancel": "asked"}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -495,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn the_table_has_the_ten_operations() {
+    fn the_table_has_every_operation() {
         let names: Vec<_> = OPS.iter().map(|o| o.name).collect();
         assert_eq!(
             names,
@@ -509,7 +606,11 @@ mod tests {
                 "note_add",
                 "note_done",
                 "approve",
-                "redo"
+                "redo",
+                "job_start",
+                "jobs",
+                "job",
+                "job_cancel"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
