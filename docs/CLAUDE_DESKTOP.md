@@ -31,8 +31,8 @@ doesn't need to be open.
 
 ## Check it works
 
-In a new chat, open the tools menu: `mockingbird-studio` lists ten tools,
-from `project_new` to `redo`. Ask "what's the status of my projects?" and
+In a new chat, open the tools menu: `mockingbird-studio` lists one tool per
+operation, such as `status`, `submit` and `approve`. Ask "what's the status of my projects?" and
 Claude calls `projects`.
 
 Every reply ends with a line like

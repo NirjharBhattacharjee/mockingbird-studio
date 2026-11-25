@@ -2,6 +2,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use studio_core::ops::OPS;
@@ -10,7 +11,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_mockingbird-studio");
 
 struct Client {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     id: u64,
 }
@@ -28,7 +29,7 @@ impl Client {
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let mut c = Client {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout,
             id: 0,
         };
@@ -46,7 +47,7 @@ impl Client {
     }
 
     fn send(&mut self, msg: Value) {
-        writeln!(self.stdin, "{msg}").unwrap();
+        writeln!(self.stdin.as_mut().unwrap(), "{msg}").unwrap();
     }
 
     fn request(&mut self, method: &str, params: Value) -> Value {
@@ -86,6 +87,26 @@ impl Drop for Client {
 }
 
 #[test]
+fn the_server_exits_cleanly_when_stdin_closes() {
+    let home = tempfile::tempdir().unwrap();
+    let mut c = Client::start(home.path());
+    c.call("projects", json!({}));
+    c.stdin = None;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = c.child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still running after stdin closed"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 fn every_operation_is_an_mcp_tool_with_a_schema() {
     let home = tempfile::tempdir().unwrap();
     let mut c = Client::start(home.path());
@@ -98,7 +119,12 @@ fn every_operation_is_an_mcp_tool_with_a_schema() {
         .collect();
     let ops: Vec<&str> = OPS.iter().map(|o| o.name).collect();
     assert_eq!(names, ops);
-    let submit = &tools[4];
+    let submit = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "submit")
+        .unwrap();
     assert_eq!(
         submit["inputSchema"]["required"],
         json!(["project", "step", "files"])
@@ -110,7 +136,6 @@ fn every_operation_is_an_mcp_tool_with_a_schema() {
 }
 
 #[test]
-#[ignore = "needs the CLI from #21; drop this line once it merges"]
 fn every_operation_is_a_cli_command() {
     for op in OPS {
         let cmd = op.name.replace('_', "-");
@@ -169,4 +194,20 @@ fn the_notes_loop_over_json_rpc() {
     let text = r["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("no argument \"via\""), "{text}");
     assert!(text.ends_with("."), "{text}");
+
+    // Two projects named "loop": the line shows full paths. One that won't
+    // parse is named in the line, not skipped.
+    let twin = work.path().join("b/loop");
+    let (_, line) = c.call("project_new", json!({"dir": twin, "title": "Twin"}));
+    let twin = twin.canonicalize().unwrap();
+    assert!(
+        line.contains(&format!("{}/research", twin.display())),
+        "{line}"
+    );
+    std::fs::write(twin.join("project.toml"), "not toml [").unwrap();
+    let (_, line) = c.call("projects", json!({}));
+    assert!(
+        line.ends_with(&format!("{}: can't read project.toml.", twin.display())),
+        "{line}"
+    );
 }

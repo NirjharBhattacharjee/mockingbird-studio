@@ -9,12 +9,12 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
-use rmcp::service::{RequestContext, RoleServer};
+use rmcp::service::{RequestContext, RoleServer, ServerInitializeError};
 use rmcp::{ErrorData, ServerHandler, ServiceExt};
 use serde_json::{Map, Value, json};
 
 use crate::ops::{self, ArgKind, OPS};
-use crate::project::{Project, State, Via};
+use crate::project::{NoteState, Project, State, Via};
 use crate::store::{self, PROJECT_FILE};
 
 pub const INSTRUCTIONS: &str = "\
@@ -72,15 +72,34 @@ pub fn tools() -> Vec<Tool> {
 pub fn waiting_line() -> String {
     let mut open = 0;
     let mut steps = Vec::new();
-    for dir in store::read_config().map(|c| c.projects).unwrap_or_default() {
+    let mut broken = Vec::new();
+    let dirs = match store::read_config() {
+        Ok(c) => c.projects,
+        Err(_) => {
+            broken.push("config.toml can't be read".to_string());
+            vec![]
+        }
+    };
+    // A project's folder name, or its full path when two listed projects
+    // share the name.
+    let label = |dir: &std::path::Path| {
+        let name = dir.file_name().unwrap_or_default();
+        if dirs.iter().filter(|d| d.file_name() == Some(name)).count() > 1 {
+            dir.display().to_string()
+        } else {
+            name.to_string_lossy().into_owned()
+        }
+    };
+    for dir in &dirs {
+        let name = label(dir);
         let Ok(p) = store::read::<Project>(&dir.join(PROJECT_FILE)) else {
+            broken.push(format!("{name}: can't read project.toml"));
             continue;
         };
-        let name = dir.file_name().unwrap_or_default().to_string_lossy();
         open += p
             .notes
             .iter()
-            .filter(|n| n.state == crate::project::NoteState::Open)
+            .filter(|n| n.state == NoteState::Open)
             .count();
         let finished = |id: &String| {
             p.steps
@@ -102,7 +121,11 @@ pub fn waiting_line() -> String {
     } else {
         steps.join(", ")
     };
-    format!("Open notes: {open}. Steps waiting on you: {steps}.")
+    let mut line = format!("Open notes: {open}. Steps waiting on you: {steps}.");
+    for b in broken {
+        line += &format!(" {b}.");
+    }
+    line
 }
 
 /// Runs one tool call through `dispatch` as `Via::Mcp`.
@@ -162,16 +185,19 @@ pub fn run() -> ExitCode {
         }
     };
     let result = rt.block_on(async {
-        Server
-            .serve(rmcp::transport::stdio())
-            .await
-            .map_err(|e| e.to_string())?
-            .waiting()
-            .await
-            .map_err(|e| e.to_string())
+        match Server.serve(rmcp::transport::stdio()).await {
+            Ok(service) => service
+                .waiting()
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            // The client hung up before the handshake: a normal stop.
+            Err(ServerInitializeError::ConnectionClosed(_)) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
     });
     match result {
-        Ok(_) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("mockingbird-studio mcp: {e}");
             ExitCode::FAILURE
