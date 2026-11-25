@@ -406,6 +406,8 @@ fn status_of(dir: &Path) -> Result<Value> {
         .iter()
         .filter(|n| n.state == NoteState::Open)
         .collect();
+    let jobs = jobs::list(Some(dir));
+    jobs::wake(&jobs);
     Ok(json!({
         "project": dir,
         "title": p.title,
@@ -414,7 +416,7 @@ fn status_of(dir: &Path) -> Result<Value> {
         "created": p.created,
         "steps": steps,
         "open_notes": open,
-        "jobs": jobs::list(Some(dir)),
+        "jobs": jobs,
     }))
 }
 
@@ -542,12 +544,16 @@ fn job_start(a: &Args, _: Via) -> Result<Value> {
 
 fn jobs(a: &Args, _: Via) -> Result<Value> {
     let project = a.opt("project").map(|p| project_dir(&p)).transpose()?;
-    Ok(json!({"jobs": jobs::list(project.as_deref())}))
+    let list = jobs::list(project.as_deref());
+    jobs::wake(&list);
+    Ok(json!({"jobs": list}))
 }
 
 fn job(a: &Args, _: Via) -> Result<Value> {
     let id = a.text("id");
-    let mut v = json!(jobs::read(&id)?);
+    let j = jobs::read(&id)?;
+    jobs::wake(std::slice::from_ref(&j));
+    let mut v = json!(j);
     v["log"] = jobs::log_tail(&id).into();
     Ok(v)
 }

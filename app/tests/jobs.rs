@@ -80,6 +80,14 @@ fn time(v: &Value) -> Timestamp {
     v.as_str().unwrap().parse().unwrap()
 }
 
+fn group_gone(pid: u64) -> bool {
+    let alive = Command::new("kill")
+        .args(["-0", "--", &format!("-{pid}")])
+        .status()
+        .unwrap();
+    !alive.success()
+}
+
 fn kill(args: &[&str]) {
     Command::new("kill").args(args).status().unwrap();
 }
@@ -167,11 +175,7 @@ fn two_at_a_time_then_cancel() {
     cli(&home, &["job-cancel", "--id", &id]).unwrap();
     let j = wait_state(&home, &id, "cancelled");
     assert!(time(&j["ended"]) > time(&j["started"]));
-    let gone = Command::new("kill")
-        .args(["-0", "--", &format!("-{pid}")])
-        .status()
-        .unwrap();
-    assert!(!gone.success(), "process group {pid} still running");
+    assert!(group_gone(pid), "process group {pid} still running");
     assert!(cli(&home, &["job-cancel", "--id", &id]).is_err());
 }
 
@@ -182,12 +186,11 @@ fn a_crashed_runner_leaves_its_jobs_interrupted() {
     let pid = wait_state(&home, &id, "running")["pid"].as_u64().unwrap();
     let runner = fs::read_to_string(home.join("runner.lock")).unwrap();
     kill(&["-9", runner.trim()]);
-    kill(&["-9", "--", &format!("-{pid}")]);
 
-    // The next job starts a new runner, which finds the first one running.
-    let next = start(&home, "nap", &["secs=0"]);
-    wait_state(&home, &next, "done");
-    let j = job(&home, &id);
+    // Looking at the job starts a new runner, which finds it running, stops
+    // the process group the dead runner left behind, and marks it.
+    let j = wait_state(&home, &id, "failed");
+    assert!(group_gone(pid), "process group {pid} still running");
     assert_eq!(
         (j["state"].as_str(), j["error"].as_str()),
         (Some("failed"), Some("interrupted"))

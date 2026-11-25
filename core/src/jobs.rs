@@ -167,23 +167,46 @@ fn is_out(name: &str) -> bool {
     name == "out" || name.starts_with("out_")
 }
 
+/// An `out` value: a path inside `cwd` that isn't one of the app's own
+/// files. `cwd` is the project folder; without one the job runs in its own
+/// new, empty folder, where a relative path without `..` can't leave it.
+fn check_out(name: &str, v: &str, cwd: Option<&Path>) -> Result<()> {
+    let outside = || format!("{name}: an out file is a path inside the folder the job runs in");
+    let p = Path::new(v);
+    if v.is_empty() || p.is_absolute() || p.components().any(|c| c == Component::ParentDir) {
+        return Err(outside());
+    }
+    let file = p.file_name().and_then(|f| f.to_str()).unwrap_or_default();
+    if file == store::PROJECT_FILE || file.ends_with(".lock") || file.ends_with(".tmp") {
+        return Err(format!("{name}: {v} is one of the app's own files"));
+    }
+    let Some(cwd) = cwd else { return Ok(()) };
+    // The nearest part that exists, symlinks included, must resolve inside.
+    let mut existing = cwd.join(p);
+    while existing.symlink_metadata().is_err() && existing.pop() {}
+    let root = cwd
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", cwd.display()))?;
+    match existing.canonicalize() {
+        Ok(real) if real.starts_with(&root) => Ok(()),
+        _ => Err(outside()),
+    }
+}
+
 /// The command with each `{name}` replaced by its value. Every placeholder
 /// needs a value and every value a placeholder. A value fills its place in
 /// one argument and never goes through a shell.
-fn fill(command: &[String], values: &BTreeMap<String, String>) -> Result<Vec<String>> {
+fn fill(
+    command: &[String],
+    values: &BTreeMap<String, String>,
+    cwd: Option<&Path>,
+) -> Result<Vec<String>> {
     for (name, v) in values {
         if v.starts_with('-') {
             return Err(format!("{name}: a value can't start with '-'"));
         }
-        let p = Path::new(v);
-        if is_out(name)
-            && (v.is_empty()
-                || p.is_absolute()
-                || p.components().any(|c| c == Component::ParentDir))
-        {
-            return Err(format!(
-                "{name}: an out file is a path inside the folder the job runs in"
-            ));
+        if is_out(name) {
+            check_out(name, v, cwd)?;
         }
     }
     let mut used = BTreeSet::new();
@@ -263,7 +286,8 @@ pub fn start(
     project: Option<PathBuf>,
     step: Option<String>,
 ) -> Result<Job> {
-    let command = fill(&declared(tool)?, &values).map_err(|e| format!("tool {tool:?} {e}"))?;
+    let command = fill(&declared(tool)?, &values, project.as_deref())
+        .map_err(|e| format!("tool {tool:?} {e}"))?;
     let now = Timestamp::now();
     let job = Job {
         id: new_dir(now)?,
@@ -282,9 +306,11 @@ pub fn start(
         values,
         rest: Default::default(),
     };
-    save(&job)?;
     // Written before the runner check, so a runner on its way out sees it.
-    ensure_runner()?;
+    if let Err(e) = save(&job).and_then(|()| ensure_runner()) {
+        let _ = fs::remove_dir_all(job_dir(&job.id));
+        return Err(e);
+    }
     Ok(job)
 }
 
@@ -295,7 +321,20 @@ pub fn cancel(id: &str) -> Result<Job> {
         return Err(format!("job {id} is already {:?}", job.state).to_lowercase());
     }
     File::create(cancel_file(id)).map_err(|e| format!("can't cancel {id}: {e}"))?;
+    ensure_runner()?;
     Ok(job)
+}
+
+/// Starts a runner if any of `jobs` is queued or running and none is up, so
+/// a runner that died is replaced as soon as anyone looks. Errors are left
+/// to the next `job_start`, which reports them.
+pub fn wake(jobs: &[Job]) {
+    if jobs
+        .iter()
+        .any(|j| matches!(j.state, JobState::Queued | JobState::Running))
+    {
+        let _ = ensure_runner();
+    }
 }
 
 fn open_lock() -> Result<File> {
@@ -365,10 +404,7 @@ pub fn run_runner() -> ExitCode {
         }
         let _ = lock.set_len(0);
         let _ = writeln!(&lock, "{}", std::process::id());
-        if let Err(e) = serve() {
-            eprintln!("mockingbird-studio runner: {e}");
-            return ExitCode::FAILURE;
-        }
+        serve();
         drop(lock);
         if !list(None).iter().any(|j| j.state == JobState::Queued) {
             return ExitCode::SUCCESS;
@@ -386,6 +422,41 @@ fn signal(pid: u32, sig: libc::c_int) {
     // The job leads its own process group, so this reaches what it started.
     // SAFETY: kill takes plain integers.
     unsafe { libc::kill(-(pid as libc::pid_t), sig) };
+}
+
+fn alive(pid: u32) -> bool {
+    // SAFETY: kill takes plain integers; signal 0 only checks.
+    unsafe { libc::kill(-(pid as libc::pid_t), 0) == 0 }
+}
+
+/// SIGTERM to a process group no runner owns any more, SIGKILL if it's
+/// still there after `KILL_AFTER`.
+// ponytail: the pid could have been reused since the old runner died; the
+// group check makes that unlikely, a start time in job.toml would rule it out.
+fn stop_group(pid: u32) {
+    if !alive(pid) {
+        return;
+    }
+    signal(pid, libc::SIGTERM);
+    let end = Instant::now() + KILL_AFTER;
+    while alive(pid) && Instant::now() < end {
+        std::thread::sleep(TICK);
+    }
+    if alive(pid) {
+        signal(pid, libc::SIGKILL);
+    }
+}
+
+/// Saves a job, or says why not in runner.log. A full disk mustn't stop the
+/// runner from looking after the jobs it has.
+fn keep(job: &Job) -> bool {
+    match save(job) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("mockingbird-studio runner: job {}: {e}", job.id);
+            false
+        }
+    }
 }
 
 fn at_once() -> usize {
@@ -442,14 +513,18 @@ fn finish(r: &mut Running, status: std::io::Result<ExitStatus>) {
 }
 
 /// Runs jobs until there's been nothing to do for `IDLE`.
-fn serve() -> Result<()> {
-    // Whoever ran these is gone: only the lock holder runs jobs.
+fn serve() {
+    // Whoever ran these is gone: only the lock holder runs jobs. Stop what
+    // they left behind before saying so.
     for mut job in list(None) {
         if job.state == JobState::Running {
+            if let Some(pid) = job.pid {
+                stop_group(pid);
+            }
             job.state = JobState::Failed;
             job.error = Some("interrupted".into());
             job.ended = Some(Timestamp::now());
-            save(&job)?;
+            keep(&job);
         }
     }
     let mut running: Vec<Running> = vec![];
@@ -468,17 +543,18 @@ fn serve() -> Result<()> {
         }
         let mut still = vec![];
         for mut r in running {
-            match r.child.try_wait() {
-                Ok(None) => still.push(r),
-                Ok(Some(s)) => {
-                    finish(&mut r, Ok(s));
-                    save(&r.job)?;
+            let status = match r.child.try_wait() {
+                Ok(None) => {
+                    still.push(r);
+                    continue;
                 }
-                Err(e) => {
-                    finish(&mut r, Err(e));
-                    save(&r.job)?;
-                }
-            }
+                Ok(Some(s)) => Ok(s),
+                Err(e) => Err(e),
+            };
+            // Anything the job left running in its group goes with it.
+            signal(r.child.id(), libc::SIGKILL);
+            finish(&mut r, status);
+            keep(&r.job);
         }
         running = still;
 
@@ -491,7 +567,7 @@ fn serve() -> Result<()> {
             if cancel_file(&job.id).exists() {
                 job.state = JobState::Cancelled;
                 job.ended = Some(Timestamp::now());
-                save(&job)?;
+                keep(&job);
                 continue;
             }
             if running.len() >= limit {
@@ -500,10 +576,16 @@ fn serve() -> Result<()> {
             }
             job.started = Some(Timestamp::now());
             match spawn(&job) {
-                Ok(child) => {
+                Ok(mut child) => {
                     job.state = JobState::Running;
                     job.pid = Some(child.id());
-                    save(&job)?;
+                    if !keep(&job) {
+                        // Unrecorded, it would run twice: stop it and let
+                        // the next tick try again from queued.
+                        signal(child.id(), libc::SIGKILL);
+                        let _ = child.wait();
+                        continue;
+                    }
                     running.push(Running {
                         job,
                         child,
@@ -514,7 +596,7 @@ fn serve() -> Result<()> {
                     job.state = JobState::Failed;
                     job.ended = job.started;
                     job.error = Some(format!("can't start {}: {e}", job.command[0]));
-                    save(&job)?;
+                    keep(&job);
                 }
             }
         }
@@ -522,7 +604,7 @@ fn serve() -> Result<()> {
         if !running.is_empty() || waiting {
             idle_since = Instant::now();
         } else if idle_since.elapsed() >= IDLE {
-            return Ok(());
+            return;
         }
         std::thread::sleep(TICK);
     }
@@ -548,7 +630,7 @@ mod tests {
         let c = cmd(&["tts", "--out={out}", "{script}", "{not a name}", "{"]);
         let v = vals(&[("out", "voice/a.wav"), ("script", "script/s.md")]);
         assert_eq!(
-            fill(&c, &v).unwrap(),
+            fill(&c, &v, None).unwrap(),
             cmd(&[
                 "tts",
                 "--out=voice/a.wav",
@@ -557,12 +639,12 @@ mod tests {
                 "{"
             ])
         );
-        let err = fill(&c, &vals(&[("out", "a.wav")])).unwrap_err();
+        let err = fill(&c, &vals(&[("out", "a.wav")]), None).unwrap_err();
         assert!(err.contains("needs values for script"), "{err}");
         let mut extra = v.clone();
         extra.insert("x".into(), "1".into());
         assert!(
-            fill(&c, &extra)
+            fill(&c, &extra, None)
                 .unwrap_err()
                 .contains("no placeholder for x")
         );
@@ -571,10 +653,28 @@ mod tests {
             ("out", "/etc/passwd"),
             ("out", "../x"),
             ("out_b", "a/../../x"),
+            ("out", "project.toml"),
+            ("out", "research/project.toml.lock"),
+            ("out", "a.tmp"),
         ] {
             let mut v = v.clone();
             v.insert(k.into(), bad.into());
-            assert!(fill(&c, &v).is_err(), "{k}={bad}");
+            assert!(fill(&c, &v, None).is_err(), "{k}={bad}");
+        }
+    }
+
+    #[test]
+    fn an_out_path_through_a_symlink_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let cwd = root.path().join("project");
+        fs::create_dir_all(cwd.join("voice")).unwrap();
+        std::os::unix::fs::symlink(root.path(), cwd.join("up")).unwrap();
+        std::os::unix::fs::symlink(root.path().join("none"), cwd.join("dangling")).unwrap();
+        for ok in ["voice/a.wav", "new/dir/a.wav"] {
+            check_out("out", ok, Some(&cwd)).unwrap();
+        }
+        for bad in ["up/a.wav", "up/x/y.wav", "dangling", "dangling/a.wav"] {
+            assert!(check_out("out", bad, Some(&cwd)).is_err(), "{bad}");
         }
     }
 

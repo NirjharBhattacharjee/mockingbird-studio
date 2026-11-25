@@ -505,7 +505,9 @@ fills one argument and never goes through a shell, and none may start with
 `-`. Placeholders named `out` or `out_*` are the files the tool writes:
 paths inside the folder the job runs in (the project's, or the job's own).
 Those that exist when it's done are the job's outputs. `jobs_at_once` in
-`config.toml` changes the two at a time.
+`config.toml` changes the two at a time. Give each command's program as an absolute
+path: the runner inherits whatever minimal `PATH` launched the caller, such
+as Claude Desktop's.
 
 ### Preview copies and the timeline
 
