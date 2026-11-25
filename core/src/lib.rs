@@ -5,6 +5,7 @@ pub mod jobs;
 pub mod mcp;
 pub mod ops;
 pub mod project;
+pub mod rounds;
 pub mod setup;
 pub mod sheet;
 pub mod store;

@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::jobs;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
+use crate::rounds;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
 
@@ -214,6 +215,17 @@ pub const OPS: &[Op] = &[
         help: "The description step's sheet as YouTube lays it out: the description with its chapter lines, and the counts YouTube limits.",
         args: &[PROJECT],
         run: sheet,
+    },
+    Op {
+        name: "round_text",
+        help: "A text output as it was submitted in a round, and the lines changed since the round before it.",
+        args: &[
+            PROJECT,
+            STEP,
+            req("path", Text, "The file, relative to the project folder."),
+            opt("round", Integer, "The round; the current one if left out."),
+        ],
+        run: round_text,
     },
 ];
 
@@ -454,7 +466,9 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
             "description" => sheet::check_submit(&dir, &paths)?,
             _ => {}
         }
-        Ok(json!(p.step(&step)?))
+        let s = p.step(&step)?;
+        rounds::keep(&dir, &step, s.round, &s.outputs)?;
+        Ok(json!(s))
     })
 }
 
@@ -570,10 +584,19 @@ fn job_cancel(a: &Args, _: Via) -> Result<Value> {
     Ok(json!({"id": a.text("id"), "cancel": "asked"}))
 }
 
+/// The sheet as submitted this round, so the person approves what the agent
+/// sent. `kept` is false when the round has no copy and the live file stands in.
 fn sheet(a: &Args, _: Via) -> Result<Value> {
-    let s = sheet::read(&a.project()?)?;
+    let dir = a.project()?;
+    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
+    let round = p.step("description")?.round;
+    let (s, kept) = match rounds::kept(&dir, "description", round, sheet::PATH)? {
+        Some(path) => (store::read::<sheet::Sheet>(&path)?, true),
+        None => (sheet::read(&dir)?, false),
+    };
     let description = s.full_description();
     Ok(json!({
+        "kept": kept,
         "error": s.check().err(),
         "limits": {
             "title": sheet::TITLE_CHARS,
@@ -592,6 +615,16 @@ fn sheet(a: &Args, _: Via) -> Result<Value> {
         "made_for_kids": s.made_for_kids,
         "altered_content": s.altered_content,
     }))
+}
+
+fn round_text(a: &Args, _: Via) -> Result<Value> {
+    let dir = a.project()?;
+    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
+    let round = match a.0.get("round").and_then(Value::as_u64) {
+        Some(r) => Some(u32::try_from(r).map_err(|_| format!("round {r} is too large"))?),
+        None => None,
+    };
+    rounds::text(&dir, p.step(&a.text("step"))?, &a.text("path"), round)
 }
 
 #[cfg(test)]
@@ -642,7 +675,8 @@ mod tests {
                 "jobs",
                 "job",
                 "job_cancel",
-                "sheet"
+                "sheet",
+                "round_text"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
@@ -853,6 +887,82 @@ mod tests {
     }
 
     #[test]
+    fn a_round_keeps_its_text_and_shows_what_changed() {
+        let t = setup();
+        let dir = new_project(t.path(), "rounds");
+        let file = Path::new(&dir).join("research/topic.md");
+        let args = json!({"project": dir, "step": "research", "files": ["research/topic.md"]});
+        let text = |extra: Value| {
+            let mut v = json!({"project": dir, "step": "research", "path": "research/topic.md"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            run("round_text", v)
+        };
+        fs::write(&file, "one\ntwo\n").unwrap();
+        run("submit", args.clone()).unwrap();
+        let r = text(json!({})).unwrap();
+        assert_eq!(
+            (r["round"].as_u64(), r["changes"].is_null()),
+            (Some(1), true)
+        );
+
+        run(
+            "redo",
+            json!({"project": dir, "step": "research", "note": "more"}),
+        )
+        .unwrap();
+        fs::write(&file, "one\nthree\n").unwrap();
+        run("submit", args).unwrap();
+        // The agent edits the file after submitting: the round still shows what it got.
+        fs::write(&file, "later\n").unwrap();
+        let r = text(json!({})).unwrap();
+        assert_eq!(r["text"], "one\nthree\n");
+        assert_eq!(r["previous_round"], 1);
+        assert_eq!(
+            r["changes"],
+            json!([[" ", "one"], ["-", "two"], ["+", "three"]])
+        );
+        assert_eq!(text(json!({"round": 1})).unwrap()["text"], "one\ntwo\n");
+        assert!(text(json!({"round": 3})).is_err());
+        assert!(text(json!({"path": "../rounds/research/topic.md"})).is_err());
+        let err = text(json!({"round": 1u64 << 32})).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+        let r = text(json!({"round": 2})).unwrap();
+        assert_eq!(
+            (r["kept"].as_bool(), r["diff"].is_null()),
+            (Some(true), true)
+        );
+
+        // A round with no kept copy falls back to the live file and says so.
+        fs::remove_dir_all(Path::new(&dir).join(".studio/rounds/research/2")).unwrap();
+        let r = text(json!({})).unwrap();
+        assert_eq!(
+            (r["kept"].as_bool(), r["text"].as_str()),
+            (Some(false), Some("later\n"))
+        );
+    }
+
+    #[test]
+    fn a_symlinked_studio_folder_is_refused() {
+        let t = setup();
+        let dir = new_project(t.path(), "symlinked");
+        let outside = t.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, Path::new(&dir).join(".studio")).unwrap();
+        fs::write(Path::new(&dir).join("research/topic.md"), "x").unwrap();
+        let err = run(
+            "submit",
+            json!({"project": dir, "step": "research", "files": ["research/topic.md"]}),
+        )
+        .unwrap_err();
+        assert!(err.contains("outside the project folder"), "{err}");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        let status = run("status", json!({"project": dir})).unwrap();
+        assert_eq!(status["steps"][0]["round"], 0);
+    }
+
+    #[test]
     fn the_description_step_checks_its_sheet() {
         let t = setup();
         let dir = new_project(t.path(), "sheet");
@@ -914,14 +1024,13 @@ mod tests {
         );
         assert_eq!(view["limits"]["description"], 5000);
         assert_eq!(view["error"], Value::Null);
-        // A sheet changed after submit shows what YouTube would refuse.
+        // A sheet changed after submit: the view is still the submitted one.
         fs::write(root.join(sheet::PATH), good.replace("[\"a\"]", "[\"a,b\"]")).unwrap();
         let view = run("sheet", json!({"project": dir})).unwrap();
-        assert!(
-            view["error"]
-                .as_str()
-                .unwrap()
-                .starts_with("tag 1 has a comma")
+        assert_eq!(
+            (view["kept"].as_bool(), &view["error"]),
+            (Some(true), &Value::Null)
         );
+        assert_eq!(view["tags"], json!(["a"]));
     }
 }
