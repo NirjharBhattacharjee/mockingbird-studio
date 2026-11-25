@@ -568,6 +568,7 @@ fn job(a: &Args, _: Via) -> Result<Value> {
 fn job_cancel(a: &Args, _: Via) -> Result<Value> {
     jobs::cancel(&a.text("id"))?;
     Ok(json!({"id": a.text("id"), "cancel": "asked"}))
+}
 
 fn sheet(a: &Args, _: Via) -> Result<Value> {
     let s = sheet::read(&a.project()?)?;
