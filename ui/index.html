@@ -10,6 +10,7 @@
 <body>
   <nav aria-label="Projects">
     <button id="jobs-button" type="button" aria-pressed="false">Jobs</button>
+    <button id="settings-button" type="button" aria-pressed="false">Settings</button>
     <h2>Projects</h2>
     <ul id="projects"></ul>
   </nav>
@@ -34,6 +35,18 @@
     <p id="job-error" role="alert"></p>
   </section>
 
+  <section id="settings-page" aria-label="Settings" hidden>
+    <h1>Niches</h1>
+    <p class="hint">A niche is a subject you make videos about. Feeds are only stored here; nothing is fetched yet.</p>
+    <div id="niches"></div>
+    <form id="niche-form">
+      <label for="niche-name">New niche</label>
+      <input id="niche-name" required placeholder="AI news">
+      <button type="submit">Add niche</button>
+    </form>
+    <p id="settings-error" role="alert"></p>
+  </section>
+
   <aside aria-label="Notes">
     <h2>Notes</h2>
     <ul id="notes"></ul>
@@ -51,6 +64,15 @@
       <div class="actions">
         <button value="cancel" formnovalidate>Cancel</button>
         <button value="send">Send back</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="remove-dialog">
+    <form method="dialog">
+      <p id="remove-text"></p>
+      <div class="actions">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="remove">Remove</button>
       </div>
     </form>
   </dialog>

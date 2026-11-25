@@ -134,3 +134,77 @@ fn the_notes_loop_over_json_rpc() {
         "{line}"
     );
 }
+
+#[test]
+fn a_visibility_set_from_the_cli_is_read_through_mcp() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "projects = []\nnote = \"kept\"\n\n[tool.voice]\ncommand = [\"tts\"]\n",
+    )
+    .unwrap();
+    let cli = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .env("MOCKINGBIRD_STUDIO_HOME", home.path())
+            .output()
+            .unwrap();
+        (out.status.success(), String::from_utf8(out.stderr).unwrap())
+    };
+    assert!(
+        cli(&[
+            "niche-add",
+            "--name",
+            "AI news",
+            "--feeds",
+            "https://a.example/feed.xml"
+        ])
+        .0
+    );
+    assert!(
+        cli(&[
+            "niche-set",
+            "--niche",
+            "ai-news",
+            "--visibility",
+            "unlisted"
+        ])
+        .0
+    );
+    let (ok, err) = cli(&["niche-set", "--niche", "ai-news", "--visibility", "secret"]);
+    assert!(!ok && err.contains("visibility should be one of"), "{err}");
+
+    let mut c = Client::start(home.path());
+    let (r, _) = c.call("niches", json!({}));
+    assert_eq!(r["niches"][0]["visibility"], "unlisted");
+    // A niche with no feeds still says so, for the window.
+    assert!(cli(&["niche-add", "--name", "Empty"]).0);
+    let (ok, err) = cli(&["niche-set", "--niche", "ai-news", "--name", "EMPTY"]);
+    assert!(!ok && err.contains("already the name or id"), "{err}");
+    assert_eq!(
+        c.call("niches", json!({})).0["niches"][1]["feeds"],
+        json!([])
+    );
+    assert_eq!(r["niches"][0]["feeds"][0], "https://a.example/feed.xml");
+    // An agent can change a feed too, and the CLI sees it.
+    c.call(
+        "feed_add",
+        json!({"niche": "ai-news", "url": "https://b.example/rss"}),
+    );
+    c.call(
+        "feed_remove",
+        json!({"niche": "ai-news", "url": "https://a.example/feed.xml"}),
+    );
+    let text = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    assert!(
+        text.contains("note = \"kept\"") && text.contains("[tool.voice]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("https://b.example/rss") && !text.contains("a.example"),
+        "{text}"
+    );
+    c.call("niche_remove", json!({"niche": "ai-news"}));
+    c.call("niche_remove", json!({"niche": "Empty"}));
+    assert_eq!(c.call("niches", json!({})).0["niches"], json!([]));
+}

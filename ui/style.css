@@ -132,7 +132,7 @@ dialog .actions { justify-content: flex-end; }
 
 #jobs-button { width: 100%; margin-bottom: 16px; }
 #jobs-button[aria-pressed="true"] { border-color: var(--accent); }
-body.jobs main, body.jobs aside { display: none; }
+body.jobs main, body.jobs aside, body.settings main, body.settings aside { display: none; }
 #jobs-page { grid-column: 2 / 4; padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 #jobs-page[hidden] { display: none; }
 #jobs-page h2 { margin: 8px 0 0; }
@@ -151,3 +151,18 @@ body.jobs main, body.jobs aside { display: none; }
 #job-log { flex: 1; min-height: 160px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--line); border-radius: 8px; font: 12px/1.5 ui-monospace, Menlo, monospace; }
 #job-error { color: #d70015; margin: 0; }
 #jobs .stopping { color: var(--soft); padding: 0 12px; }
+
+#settings-button { width: 100%; margin-bottom: 8px; }
+#settings-button[aria-pressed="true"] { border-color: var(--accent); }
+#settings-page { grid-column: 2 / 4; padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#settings-page[hidden] { display: none; }
+#settings-page .hint { margin: 0; color: var(--soft); }
+.niche { flex: none; border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: grid; grid-template-columns: 90px 1fr; gap: 8px; align-items: center; }
+.niche h2 { grid-column: 1 / -1; margin: 0; }
+.niche .feeds { list-style: none; margin: 0; padding: 0; }
+.niche .feeds li { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+.niche .feeds span { flex: 1; overflow-wrap: anywhere; }
+.niche .row { grid-column: 1 / -1; display: flex; gap: 8px; }
+.niche .row input { flex: 1; }
+#niche-form { display: flex; gap: 8px; align-items: center; }
+#niche-form input { flex: 1; max-width: 320px; }

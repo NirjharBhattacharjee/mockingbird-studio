@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use serde_json::{Map, Value, json};
 
 use crate::jobs;
+use crate::niche;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
 use crate::rounds;
 use crate::sheet;
@@ -61,6 +62,8 @@ const PROJECT: Arg = req(
     Text,
     "The project's folder, or its folder name when only one listed project has it.",
 );
+const NICHE: Arg = req("niche", Text, "The niche's id, or its name.");
+const NICHE_VISIBILITY: &str = "private, unlisted or public. Private unless set.";
 const STEP: Arg = req("step", Text, "The step's id, such as script or previews.");
 
 pub const OPS: &[Op] = &[
@@ -232,6 +235,58 @@ pub const OPS: &[Op] = &[
         ],
         run: round_text,
     },
+    Op {
+        name: "niches",
+        help: "Every niche with its feeds, workflow, visibility and channel.",
+        args: &[],
+        run: |a, _| niche::niches(a),
+    },
+    Op {
+        name: "niche_add",
+        help: "Add a niche. Its id is the name in lower case with dashes. Visibility is private unless you set it.",
+        args: &[
+            req("name", Text, "The niche's name, such as AI news."),
+            opt(
+                "feeds",
+                TextList,
+                "Feed addresses, http or https. Stored now, fetched by the scan later.",
+            ),
+            opt("workflow", Text, "The default workflow for its projects."),
+            opt("visibility", Text, NICHE_VISIBILITY),
+            opt("channel", Text, "The label of the channel it posts to."),
+        ],
+        run: |a, _| niche::niche_add(a),
+    },
+    Op {
+        name: "niche_set",
+        help: "Change a niche's name, workflow, visibility or channel. An empty workflow or channel clears it.",
+        args: &[
+            NICHE,
+            opt("name", Text, "The new name. The id stays."),
+            opt("workflow", Text, "The default workflow for its projects."),
+            opt("visibility", Text, NICHE_VISIBILITY),
+            opt("channel", Text, "The label of the channel it posts to."),
+        ],
+        run: |a, _| niche::niche_set(a),
+    },
+    Op {
+        name: "niche_remove",
+        help: "Remove a niche and its feed list. Projects that name it keep the name.",
+        args: &[NICHE],
+        run: |a, _| niche::niche_remove(a),
+    },
+    Op {
+        name: "feed_add",
+        help: "Add a feed address to a niche. Nothing is fetched.",
+        args: &[NICHE, req("url", Text, "An http or https address.")],
+        run: |a, _| niche::feed_add(a),
+    },
+    Op {
+        name: "feed_remove",
+        help: "Remove a feed address from a niche.",
+        args: &[NICHE, req("url", Text, "The address, as listed.")],
+        run: |a, _| niche::feed_remove(a),
+    },
 ];
 
 /// Runs the operation `name` with JSON `args`. `via` says which layer called.
@@ -278,19 +333,19 @@ pub fn dispatch(name: &str, args: &Value, via: Via) -> Result<Value> {
 }
 
 /// Arguments already checked against the table by `dispatch`.
-struct Args<'a>(&'a Map<String, Value>);
+pub(crate) struct Args<'a>(&'a Map<String, Value>);
 
 impl Args<'_> {
-    fn opt(&self, key: &str) -> Option<String> {
+    pub(crate) fn opt(&self, key: &str) -> Option<String> {
         self.0.get(key).and_then(Value::as_str).map(str::to_string)
     }
-    fn text(&self, key: &str) -> String {
+    pub(crate) fn text(&self, key: &str) -> String {
         self.opt(key).unwrap_or_default()
     }
     fn number(&self, key: &str) -> Option<f64> {
         self.0.get(key).and_then(Value::as_f64)
     }
-    fn list(&self, key: &str) -> Vec<String> {
+    pub(crate) fn list(&self, key: &str) -> Vec<String> {
         let items = self.0.get(key).and_then(Value::as_array);
         items
             .into_iter()
@@ -712,7 +767,13 @@ mod tests {
                 "job",
                 "job_cancel",
                 "sheet",
-                "round_text"
+                "round_text",
+                "niches",
+                "niche_add",
+                "niche_set",
+                "niche_remove",
+                "feed_add",
+                "feed_remove"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));

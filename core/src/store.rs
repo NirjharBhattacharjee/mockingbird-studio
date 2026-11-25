@@ -30,6 +30,8 @@ pub fn home() -> PathBuf {
 pub struct Config {
     #[serde(default)]
     pub projects: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub niche: Vec<crate::niche::Niche>,
     #[serde(flatten)]
     pub rest: toml::Table,
 }
@@ -47,7 +49,9 @@ pub fn read<T: DeserializeOwned>(path: &Path) -> Result<T> {
 pub fn read_config() -> Result<Config> {
     let path = config_path();
     if path.exists() {
-        read(&path)
+        let mut c: Config = read(&path)?;
+        crate::niche::tidy(&mut c.niche);
+        Ok(c)
     } else {
         Ok(Config::default())
     }
