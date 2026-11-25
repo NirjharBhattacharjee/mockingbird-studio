@@ -31,6 +31,15 @@ pub fn check(dir: &Path, files: &[String]) -> Result<()> {
     let (kind, size) = dimensions(&head).ok_or_else(|| {
         format!("{file} is not a PNG or JPEG (or its header is damaged); a thumbnail must be one")
     })?;
+    let ext = file.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    let named = match ext.as_deref() {
+        Some("png") => "PNG",
+        Some("jpg" | "jpeg") => "JPEG",
+        _ => return Err(format!("{file} must be named .png, .jpg or .jpeg")),
+    };
+    if named != kind {
+        return Err(format!("{file} is named like a {named} but is a {kind}"));
+    }
     if size != SIZE {
         return Err(format!(
             "{file} is {}x{} {kind}; a thumbnail must be {}x{}",
@@ -121,6 +130,15 @@ mod tests {
         let e = try_file("t.png", b"GIF89a....................").unwrap_err();
         assert!(e.contains("not a PNG or JPEG"), "{e}");
         assert!(try_file("t.jpg", &[0xFF, 0xD8, 0xFF, 0xDA]).is_err());
+    }
+
+    #[test]
+    fn the_extension_must_match_the_type() {
+        let e = try_file("t.jpg", &png(1280, 720)).unwrap_err();
+        assert!(e.contains("named like a JPEG but is a PNG"), "{e}");
+        let e = try_file("t.gif", &png(1280, 720)).unwrap_err();
+        assert!(e.contains(".png, .jpg or .jpeg"), "{e}");
+        try_file("t.JPEG", &jpeg(1280, 720)).unwrap();
     }
 
     #[test]

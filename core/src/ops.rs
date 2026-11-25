@@ -387,14 +387,16 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
         })
         .collect::<Result<Vec<_>>>()?;
     let step = a.text("step");
-    if step == "thumbnail" {
-        crate::thumbnail::check(
-            &dir,
-            &outputs.iter().map(|o| o.path.clone()).collect::<Vec<_>>(),
-        )?;
-    }
+    let paths: Vec<String> = outputs.iter().map(|o| o.path.clone()).collect();
     store::update_project(&dir, |p| {
         p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
+        // After the gate check, so a gate refusal comes first. An Err here
+        // writes nothing. A match so the next step's checks are one more arm.
+        #[allow(clippy::single_match)]
+        match step.as_str() {
+            "thumbnail" => crate::thumbnail::check(&dir, &paths)?,
+            _ => {}
+        }
         Ok(json!(p.step(&step)?))
     })
 }
