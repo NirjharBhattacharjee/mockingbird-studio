@@ -2,3 +2,6 @@
 
 pub mod cli;
 pub mod mcp;
+pub mod ops;
+pub mod project;
+pub mod store;
