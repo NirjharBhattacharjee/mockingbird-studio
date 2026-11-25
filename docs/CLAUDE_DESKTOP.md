@@ -10,7 +10,8 @@ Install Tauri's CLI once: `cargo install tauri-cli --version "^2" --locked`.
 (If it says it needs a newer rustc, pin an older release, such as
 `--version "=2.11.5"` for Rust 1.89.)
 Then, from `app/`, run `cargo tauri build`. The bundle is
-`target/release/bundle/macos/mockingbird-studio.app`. Copy it to
+`<repo>/target/release/bundle/macos/mockingbird-studio.app`, at the repo
+root, not in `app/`. Copy it to
 `/Applications`. It isn't signed or notarized, so the first time, right-click
 it and choose Open.
 
@@ -29,8 +30,11 @@ Run `setup` with the binary you want Claude Desktop to start:
 
 It shows the entry and the file it will edit, and asks `Write it? [y/N]`.
 Anything but `y` changes nothing. `--yes` skips the question for scripts, and
-`--config <file>` edits a different file. It keeps every other entry in the
-file, replaces an older `mockingbird-studio` entry, and refuses to touch a
+`--config <file>` edits a different file. Run from `target/` or from a
+translocated (quarantined, not yet moved) app, the path won't last, so the
+prompt warns and `--yes` refuses. It keeps every other entry in the
+file, replaces an older `mockingbird-studio` entry (showing both, and keeping the
+old one's `env` if the new one has none), and refuses to touch a
 file that isn't valid JSON. If `MOCKINGBIRD_STUDIO_HOME` is set when you run
 it, the entry carries it, so Claude Desktop uses the same projects folder as
 the CLI and the window.

@@ -6,8 +6,8 @@ use tauri::{AppHandle, Manager};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // Both branches return before any Tauri code runs, so no window or dock
-    // icon appears.
+    // The three early returns happen before any Tauri code runs, so no window
+    // or dock icon appears.
     match args.first().map(String::as_str) {
         Some("mcp") => return studio_core::mcp::run(),
         Some("runner") => return studio_core::jobs::run_runner(),

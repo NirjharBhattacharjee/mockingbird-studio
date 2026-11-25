@@ -11,9 +11,38 @@ use serde_json::{Map, Value, json};
 
 const NAME: &str = "mockingbird-studio";
 
-fn default_config() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Application Support/Claude/claude_desktop_config.json")
+fn default_config() -> Result<PathBuf, String> {
+    match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        Some(home) => Ok(PathBuf::from(home)
+            .join("Library/Application Support/Claude/claude_desktop_config.json")),
+        None => Err("HOME isn't set; pass --config <file>".into()),
+    }
+}
+
+/// The entry for this binary, and a warning when its path won't last.
+fn this_entry() -> Result<(Value, Option<&'static str>), String> {
+    let exe =
+        std::env::current_exe().map_err(|e| format!("can't find this program's path: {e}"))?;
+    let exe = exe
+        .to_str()
+        .ok_or("can't find this program's path: it isn't valid UTF-8")?;
+    let mut entry = json!({ "command": exe, "args": ["mcp"] });
+    // Projects somewhere else: the server must see the same folder as the CLI.
+    if let Some(home) = std::env::var_os("MOCKINGBIRD_STUDIO_HOME").filter(|h| !h.is_empty()) {
+        let home = std::path::absolute(home)
+            .map_err(|e| format!("can't resolve MOCKINGBIRD_STUDIO_HOME: {e}"))?;
+        let home = home
+            .to_str()
+            .ok_or("MOCKINGBIRD_STUDIO_HOME isn't valid UTF-8")?;
+        entry["env"] = json!({ "MOCKINGBIRD_STUDIO_HOME": home });
+    }
+    let fragile = exe.contains("/target/") || exe.contains("/AppTranslocation/");
+    Ok((
+        entry,
+        fragile.then_some(
+            "this path changes when you rebuild or move the app; run setup from /Applications/mockingbird-studio.app instead",
+        ),
+    ))
 }
 
 /// Runs `setup` with the arguments after the word `setup`.
@@ -39,25 +68,21 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(e.exit_code() as u8);
         }
     };
-    let config = m
-        .get_one::<String>("config")
-        .map_or_else(default_config, PathBuf::from);
-    let result = std::env::current_exe()
-        .map_err(|e| format!("can't find this program's path: {e}"))
-        .and_then(|exe| {
-            let mut entry = json!({ "command": exe, "args": ["mcp"] });
-            // Projects somewhere else: the server must see the same folder as the CLI.
-            if let Some(home) = std::env::var_os("MOCKINGBIRD_STUDIO_HOME") {
-                entry["env"] = json!({ "MOCKINGBIRD_STUDIO_HOME": home });
-            }
-            apply(
-                &config,
-                entry,
-                m.get_flag("yes"),
-                &mut std::io::stdin().lock(),
-                &mut std::io::stdout(),
-            )
-        });
+    let result = (|| {
+        let config = match m.get_one::<String>("config") {
+            Some(c) => PathBuf::from(c),
+            None => default_config()?,
+        };
+        let (entry, warn) = this_entry()?;
+        apply(
+            &config,
+            entry,
+            warn,
+            m.get_flag("yes"),
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout(),
+        )
+    })();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -67,20 +92,10 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 }
 
-/// Puts `entry` under `mcpServers` in `config`, keeping every other key.
-/// Nothing is written unless `yes` or the user answers y.
-pub fn apply(
-    config: &Path,
-    entry: Value,
-    yes: bool,
-    input: &mut impl BufRead,
-    out: &mut impl Write,
-) -> Result<(), String> {
-    // Edit the real file when the path is a symlink.
-    let config = config
-        .canonicalize()
-        .unwrap_or_else(|_| config.to_path_buf());
-    let mut root = match std::fs::read_to_string(&config) {
+/// Reads the config and returns it with `entry` under `mcpServers`, and the
+/// entry it replaces. A replaced entry's `env` is kept when `entry` has none.
+fn plan(config: &Path, mut entry: Value) -> Result<(Value, Value, Option<Value>), String> {
+    let mut root = match std::fs::read_to_string(config) {
         // A file we can't parse is the user's; never replace it.
         Ok(text) => serde_json::from_str::<Value>(&text)
             .ok()
@@ -96,7 +111,35 @@ pub fn apply(
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or("mcpServers in the config isn't an object; fix it first")?;
-    if servers.get(NAME) == Some(&entry) {
+    let old = servers.get(NAME).cloned();
+    if let (Some(env), None) = (old.as_ref().and_then(|o| o.get("env")), entry.get("env")) {
+        entry["env"] = env.clone();
+    }
+    servers.insert(NAME.into(), entry.clone());
+    Ok((root, entry, old))
+}
+
+/// Puts `entry` under `mcpServers` in `config`, keeping every other key.
+/// Nothing is written unless `yes` or the user answers y. `warn` is shown
+/// with the question, and makes `yes` an error: nobody read it.
+pub fn apply(
+    config: &Path,
+    entry: Value,
+    warn: Option<&str>,
+    yes: bool,
+    input: &mut impl BufRead,
+    out: &mut impl Write,
+) -> Result<(), String> {
+    if let (Some(w), true) = (warn, yes) {
+        return Err(format!("{w}. Run without --yes to write it anyway."));
+    }
+    // Edit the real file when the path is a symlink.
+    let config = config
+        .canonicalize()
+        .unwrap_or_else(|_| config.to_path_buf());
+    let pretty = |v: &Value| serde_json::to_string_pretty(v).expect("a Value always serializes");
+    let (_, entry, old) = plan(&config, entry)?;
+    if old.as_ref() == Some(&entry) {
         return say(
             out,
             format!(
@@ -105,19 +148,23 @@ pub fn apply(
             ),
         );
     }
-    let verb = if servers.contains_key(NAME) {
-        "replace the existing"
-    } else {
-        "add the"
-    };
-    say(
-        out,
-        format!(
-            "This will {verb} \"{NAME}\" entry in {}:\n{}",
+    let mut text = match &old {
+        Some(old) => format!(
+            "This will replace the \"{NAME}\" entry in {}.\nNow:\n{}\nNew:\n{}",
             config.display(),
-            serde_json::to_string_pretty(&entry).expect("a Value always serializes")
+            pretty(old),
+            pretty(&entry)
         ),
-    )?;
+        None => format!(
+            "This will add the \"{NAME}\" entry in {}:\n{}",
+            config.display(),
+            pretty(&entry)
+        ),
+    };
+    if let Some(w) = warn {
+        text.push_str(&format!("\nWarning: {w}."));
+    }
+    say(out, text)?;
     if !yes {
         write!(out, "Write it? [y/N] ")
             .and_then(|_| out.flush())
@@ -129,7 +176,8 @@ pub fn apply(
             return say(out, "Nothing written.".into());
         }
     }
-    servers.insert(NAME.into(), entry);
+    // The file may have changed while the question was open.
+    let (root, ..) = plan(&config, entry)?;
     write_atomic(&config, &root)?;
     say(
         out,
@@ -170,7 +218,7 @@ mod tests {
 
     fn go(path: &Path, yes: bool, answer: &str) -> (Result<(), String>, String) {
         let mut out = Vec::new();
-        let r = apply(path, entry(), yes, &mut answer.as_bytes(), &mut out);
+        let r = apply(path, entry(), None, yes, &mut answer.as_bytes(), &mut out);
         (r, String::from_utf8(out).unwrap())
     }
 
@@ -236,5 +284,76 @@ mod tests {
             assert!(go(&path, true, "").0.is_err(), "{bad}");
             assert_eq!(std::fs::read_to_string(&path).unwrap(), bad);
         }
+    }
+
+    #[test]
+    fn a_fragile_path_is_warned_about_and_refused_with_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.json");
+        let run = |yes, answer: &str| {
+            let mut out = Vec::new();
+            let r = apply(
+                &path,
+                entry(),
+                Some("it moves"),
+                yes,
+                &mut answer.as_bytes(),
+                &mut out,
+            );
+            (r, String::from_utf8(out).unwrap())
+        };
+        let (r, _) = run(true, "");
+        assert!(r.unwrap_err().contains("it moves"));
+        assert!(!path.exists());
+        let (r, said) = run(false, "y\n");
+        assert!(r.is_ok() && said.contains("Warning: it moves"), "{said}");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn a_replaced_entry_keeps_its_env_and_is_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{"mockingbird-studio":{"command":"/old","args":["mcp"],"env":{"A":"1"}}}}"#,
+        )
+        .unwrap();
+        let (r, said) = go(&path, false, "y\n");
+        assert!(
+            r.is_ok() && said.contains("/old") && said.contains("/x/mockingbird-studio"),
+            "{said}"
+        );
+        let e = &read(&path)["mcpServers"]["mockingbird-studio"];
+        assert_eq!(e["command"], "/x/mockingbird-studio");
+        assert_eq!(e["env"], json!({"A":"1"}));
+    }
+
+    /// Changes the file at the moment the user answers.
+    struct Racer(std::path::PathBuf, &'static [u8]);
+    impl std::io::Read for Racer {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            unreachable!("only read_line is used")
+        }
+    }
+    impl BufRead for Racer {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            std::fs::write(&self.0, r#"{"added":"while asking"}"#).unwrap();
+            Ok(std::mem::take(&mut self.1))
+        }
+        fn consume(&mut self, _: usize) {}
+    }
+
+    #[test]
+    fn the_file_is_read_again_after_the_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(&path, "{}").unwrap();
+        let mut input = Racer(path.clone(), b"y\n");
+        apply(&path, entry(), None, false, &mut input, &mut Vec::new()).unwrap();
+        assert_eq!(
+            read(&path),
+            json!({"added":"while asking","mcpServers":{"mockingbird-studio":entry()}})
+        );
     }
 }
