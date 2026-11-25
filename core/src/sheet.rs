@@ -13,9 +13,9 @@ use crate::store;
 
 pub const PATH: &str = "description/sheet.toml";
 
-const TITLE_CHARS: usize = 100;
-const DESCRIPTION_BYTES: usize = 5000;
-const TAGS_CHARS: usize = 500;
+pub const TITLE_CHARS: usize = 100;
+pub const DESCRIPTION_BYTES: usize = 5000;
+pub const TAGS_CHARS: usize = 500;
 const MIN_CHAPTERS: usize = 3;
 const CHAPTER_SECONDS: u32 = 10;
 
@@ -91,6 +91,9 @@ impl Sheet {
         if self.title.trim().is_empty() {
             return Err("title is empty".into());
         }
+        if self.title.contains(['\n', '\r']) {
+            return Err("title has a line break".into());
+        }
         if title > TITLE_CHARS {
             return Err(format!(
                 "title is {title} characters; YouTube allows {TITLE_CHARS}"
@@ -103,7 +106,21 @@ impl Sheet {
                 full.len()
             ));
         }
-        for (field, text) in [("title", &self.title), ("description", &full)] {
+        if let Some(i) = self.tags.iter().position(|t| t.trim().is_empty()) {
+            return Err(format!("tag {} is empty", i + 1));
+        }
+        if let Some(i) = self.tags.iter().position(|t| t.contains(',')) {
+            return Err(format!(
+                "tag {} has a comma; YouTube splits tags at commas",
+                i + 1
+            ));
+        }
+        let tags = self.tags.join(",");
+        for (field, text) in [
+            ("title", &self.title),
+            ("description", &full),
+            ("tags", &tags),
+        ] {
             if text.contains(['<', '>']) {
                 return Err(format!("{field} has < or >, which YouTube refuses"));
             }
@@ -138,7 +155,7 @@ impl Sheet {
         }
         for (i, pair) in c.windows(2).enumerate() {
             let (a, b) = (&pair[0], &pair[1]);
-            if b.at < a.at + CHAPTER_SECONDS {
+            if b.at < a.at.saturating_add(CHAPTER_SECONDS) {
                 return Err(format!(
                     "chapter {} starts at {}, less than {CHAPTER_SECONDS} seconds after chapter {} at {}; \
                      chapters go in order and last {CHAPTER_SECONDS} seconds or more",
@@ -149,8 +166,13 @@ impl Sheet {
                 ));
             }
         }
-        if let Some(i) = c.iter().position(|ch| ch.title.trim().is_empty()) {
-            return Err(format!("chapter {} has no title", i + 1));
+        for (i, ch) in c.iter().enumerate() {
+            if ch.title.trim().is_empty() {
+                return Err(format!("chapter {} has no title", i + 1));
+            }
+            if ch.title.contains(['\n', '\r']) {
+                return Err(format!("chapter {} has a line break in its title", i + 1));
+            }
         }
         Ok(())
     }
@@ -218,6 +240,9 @@ title = "Wrap"
         let e = refused(|s| s.title = " ".into());
         assert!(e.starts_with("title is empty"), "{e}");
 
+        let e = refused(|s| s.title = "a\nb".into());
+        assert!(e.starts_with("title has a line break"), "{e}");
+
         let e = refused(|s| s.title = "a <b>".into());
         assert!(e.starts_with("title has < or >"), "{e}");
 
@@ -230,6 +255,13 @@ title = "Wrap"
         assert!(e.starts_with("description has < or >"), "{e}");
 
         // 50 tags of 9 characters and 49 commas: 499. One more space: 501.
+        let e = refused(|s| s.tags[1] = " ".into());
+        assert!(e.starts_with("tag 2 is empty"), "{e}");
+        let e = refused(|s| s.tags[0] = "a,b".into());
+        assert!(e.starts_with("tag 1 has a comma"), "{e}");
+        let e = refused(|s| s.tags[0] = "<b>".into());
+        assert!(e.starts_with("tags has < or >"), "{e}");
+
         let mut s = good();
         s.tags = vec!["abcdefghi".into(); 50];
         assert_eq!(s.tags_chars(), 499);
@@ -255,6 +287,12 @@ title = "Wrap"
 
         let e = refused(|s| s.chapters[2].title = "".into());
         assert!(e.starts_with("chapter 3 has no title"), "{e}");
+
+        let e = refused(|s| s.chapters[1].title = "a\rb".into());
+        assert!(e.starts_with("chapter 2 has a line break"), "{e}");
+
+        let e = refused(|s| s.chapters[1].at = u32::MAX);
+        assert!(e.starts_with("chapter 3 starts at"), "{e}");
 
         let mut s = good();
         s.chapters.clear();

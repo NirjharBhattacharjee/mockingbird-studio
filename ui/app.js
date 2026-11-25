@@ -197,9 +197,10 @@ async function drawSheet(box) {
     sheet.append(head, el(tag, text));
   };
   const sheet = el("div", null, { class: "sheet" });
-  part("Title", "p", s.title, s.counts.title, 100, "characters");
-  part("Description", "pre", s.description, s.counts.description, 5000, "bytes");
-  part("Tags", "p", s.tags.join(", "), s.counts.tags, 500, "characters");
+  if (s.error) sheet.append(el("p", `YouTube would refuse this sheet: ${s.error}`, { class: "error" }));
+  part("Title", "p", s.title, s.counts.title, s.limits.title, "characters");
+  part("Description", "pre", s.description, s.counts.description, s.limits.description, "bytes");
+  part("Tags", "p", s.tags.join(", "), s.counts.tags, s.limits.tags, "characters");
   sheet.append(
     el("p", `Category ${s.category} · made for kids: ${yes(s.made_for_kids)} · altered or synthetic content: ${yes(s.altered_content)}`, { class: "declarations" }),
   );

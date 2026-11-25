@@ -573,6 +573,12 @@ fn sheet(a: &Args, _: Via) -> Result<Value> {
     let s = sheet::read(&a.project()?)?;
     let description = s.full_description();
     Ok(json!({
+        "error": s.check().err(),
+        "limits": {
+            "title": sheet::TITLE_CHARS,
+            "description": sheet::DESCRIPTION_BYTES,
+            "tags": sheet::TAGS_CHARS,
+        },
         "counts": {
             "title": s.title.chars().count(),
             "description": description.len(),
@@ -894,6 +900,17 @@ mod tests {
         assert_eq!(
             view["counts"],
             json!({"title": 7, "description": 9, "tags": 1})
+        );
+        assert_eq!(view["limits"]["description"], 5000);
+        assert_eq!(view["error"], Value::Null);
+        // A sheet changed after submit shows what YouTube would refuse.
+        fs::write(root.join(sheet::PATH), good.replace("[\"a\"]", "[\"a,b\"]")).unwrap();
+        let view = run("sheet", json!({"project": dir})).unwrap();
+        assert!(
+            view["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("tag 1 has a comma")
         );
     }
 }
