@@ -5,9 +5,9 @@ first: it says what the app is and why it exists.
 
 ## What lives here
 
-The app is one Rust binary: an MCP server, a job runner and a web server for
-the review page. The page is plain HTML, CSS and JavaScript, served on
-`localhost`, with no framework and no build step.
+The app is a Rust Tauri app: an MCP server, a job runner and one window.
+The window's UI is plain HTML, CSS and JavaScript, with no framework and no
+build step.
 
 Not here:
 
@@ -28,11 +28,11 @@ and say so. Don't implement it quietly.
 - No paywall, usage cap, account, login, licence key or telemetry.
 - Network only for what the user asked for: the feeds they listed and
   downloads they approved. mockingbird itself stays offline.
-- No Electron and no native GUI toolkit. The review page is a local web page.
+- Tauri is the only GUI. No Electron, no bundled browser, no other toolkit.
 - Never open mockingbird's `data.db`. Talk to mockingbird through its MCP
   server or CLI.
-- Every step works with no page open. The MCP tools and the CLI must do
-  everything the page does, so every step can be tested headless.
+- Every step works with the window closed. The MCP tools and the CLI must do
+  everything the window does, so every step can be tested headless.
 - A render or long job never depends on the chat that started it.
 - Every approval is written to the project's `project.toml` with the time.
 - MIT, DCO sign-off, no CLA. Don't copy code under a licence that isn't
@@ -49,7 +49,7 @@ and say so. Don't implement it quietly.
 5. Commit with `git commit -s`. Run commit messages, PR text, docs and
    comments through `/unslop`.
 6. Evidence goes in the PR: test output, timings, or a screenshot of the
-   page before and after.
+   window before and after.
 7. CodeRabbit reviews PRs here. Fix every comment in one push per round, and
    don't push just to start a review. If CodeRabbit can't review, run a local
    `/code-review` at medium.

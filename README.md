@@ -11,9 +11,8 @@ Nothing is built yet. This README is the plan, written after doing the whole
 pipeline by hand once, on 24 November 2026.
 
 > The Claude Code plugin that used to live here moved into mockingbird's repo
-> as [`plugin/`](https://github.com/NirjharBhattacharjee/mockingbird/tree/main/plugin)
-> (install `mockingbird@mockingbird`). Its old files stay in this repo until the
-> app's first code lands, and nothing updates them.
+> as [`plugin/`](https://github.com/NirjharBhattacharjee/mockingbird/tree/main/plugin).
+> Install `mockingbird@mockingbird` from there.
 
 ## The pipeline, as it ran on 24 November
 
@@ -71,7 +70,7 @@ The output was good. Getting there was a mess.
           (state, previews,    (transcribe, look,
            jobs, approvals)     motion, render, measure)
                   │
-                  └──▶ a page you keep open: every step, every preview, approve or redo
+                  └──▶ the app window: every step, every preview, approve or redo
 ```
 
 **One folder per video, one layout.** `project.toml` records each step's
@@ -80,12 +79,12 @@ where things stand instead of reading transcripts.
 
 **Steps are gates.** Research, script, voice, look, sound, assets, previews,
 shorts, film, upload. A step that needs your yes stops until it has one. You
-approve or ask for a redo, with a note, on the page. The agent picks up the
+approve or ask for a redo, with a note, in the app window. The agent picks up the
 note through the app's MCP tools.
 
 **Previews in one place.** Audio players for voice and mix, the mood boards
 side by side, contact sheets and MP4s for every render, the script with its
-changes. Every clip is converted to something the page can play.
+changes. Every clip is converted to something the window can play.
 
 **The app owns the render queue.** It starts mockingbird renders itself, so
 they keep going when a chat ends, and it can run two at a time.
@@ -93,14 +92,14 @@ they keep going when a chat ends, and it can run two at a time.
 **The morning scan runs on its own.** At a time you set, the app pulls the
 feeds and asks an agent from the command line (`claude -p` today, any CLI you
 configure) for a short list of topics. You see the list when you open the
-page.
+app.
 
 **No model inside.** The app never calls an LLM API. The agent is whatever MCP
 client you use, so nothing here is tied to Claude.
 
-**Built in Rust.** One binary: an MCP server, a job runner and a small web
-server. The page is plain HTML and JavaScript served on `localhost`, and
-Safari's "Add to Dock" gives it its own window. Voice, score and research
+**Built in Rust with Tauri.** One Mac app: an MCP server, a job runner and
+a window. The window is plain HTML and JavaScript in the system's WebKit, not
+a bundled browser. Voice, score and research
 tools stay as they are and run as subprocesses.
 
 ## What it won't do
