@@ -10,6 +10,7 @@ fn main() -> ExitCode {
     // icon appears.
     match args.first().map(String::as_str) {
         Some("mcp") => return studio_core::mcp::run(),
+        Some("runner") => return studio_core::jobs::run_runner(),
         Some(_) => return studio_core::cli::run(&args),
         None => {}
     }

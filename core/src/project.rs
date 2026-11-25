@@ -238,16 +238,10 @@ impl Project {
             .ok_or_else(|| format!("no step {id:?} in this project"))
     }
 
-    /// Records a new round of files. Refused until every step in `after`
-    /// is approved or done: this is what makes a gate hold.
-    pub fn submit(
-        &mut self,
-        id: &str,
-        outputs: Vec<Output>,
-        summary: Option<String>,
-        via: Via,
-        now: Timestamp,
-    ) -> Result<()> {
+    /// Whether step `id` takes a new round: it's in todo, redo or approved,
+    /// and every step in `after` is approved or done. `submit` and a job
+    /// tied to a step both go through this.
+    pub fn check_submit(&self, id: &str) -> Result<()> {
         let step = self.step(id)?;
         if !matches!(step.state, State::Todo | State::Redo | State::Approved) {
             return Err(format!(
@@ -272,7 +266,21 @@ impl Project {
                 waiting.join(", ")
             ));
         }
-        let was_approved = step.state == State::Approved;
+        Ok(())
+    }
+
+    /// Records a new round of files. Refused until every step in `after`
+    /// is approved or done: this is what makes a gate hold.
+    pub fn submit(
+        &mut self,
+        id: &str,
+        outputs: Vec<Output>,
+        summary: Option<String>,
+        via: Via,
+        now: Timestamp,
+    ) -> Result<()> {
+        self.check_submit(id)?;
+        let was_approved = self.step(id)?.state == State::Approved;
         let step = self.step_mut(id)?;
         step.round += 1;
         step.outputs = outputs;
