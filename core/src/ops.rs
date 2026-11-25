@@ -584,10 +584,19 @@ fn job_cancel(a: &Args, _: Via) -> Result<Value> {
     Ok(json!({"id": a.text("id"), "cancel": "asked"}))
 }
 
+/// The sheet as submitted this round, so the person approves what the agent
+/// sent. `kept` is false when the round has no copy and the live file stands in.
 fn sheet(a: &Args, _: Via) -> Result<Value> {
-    let s = sheet::read(&a.project()?)?;
+    let dir = a.project()?;
+    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
+    let round = p.step("description")?.round;
+    let (s, kept) = match rounds::kept(&dir, "description", round, sheet::PATH)? {
+        Some(path) => (store::read::<sheet::Sheet>(&path)?, true),
+        None => (sheet::read(&dir)?, false),
+    };
     let description = s.full_description();
     Ok(json!({
+        "kept": kept,
         "error": s.check().err(),
         "limits": {
             "title": sheet::TITLE_CHARS,
@@ -611,7 +620,10 @@ fn sheet(a: &Args, _: Via) -> Result<Value> {
 fn round_text(a: &Args, _: Via) -> Result<Value> {
     let dir = a.project()?;
     let p: Project = store::read(&dir.join(PROJECT_FILE))?;
-    let round = a.number("round").map(|r| r as u32);
+    let round = match a.0.get("round").and_then(Value::as_u64) {
+        Some(r) => Some(u32::try_from(r).map_err(|_| format!("round {r} is too large"))?),
+        None => None,
+    };
     rounds::text(&dir, p.step(&a.text("step"))?, &a.text("path"), round)
 }
 
@@ -914,6 +926,40 @@ mod tests {
         assert_eq!(text(json!({"round": 1})).unwrap()["text"], "one\ntwo\n");
         assert!(text(json!({"round": 3})).is_err());
         assert!(text(json!({"path": "../rounds/research/topic.md"})).is_err());
+        let err = text(json!({"round": 1u64 << 32})).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+        let r = text(json!({"round": 2})).unwrap();
+        assert_eq!(
+            (r["kept"].as_bool(), r["diff"].is_null()),
+            (Some(true), true)
+        );
+
+        // A round with no kept copy falls back to the live file and says so.
+        fs::remove_dir_all(Path::new(&dir).join(".studio/rounds/research/2")).unwrap();
+        let r = text(json!({})).unwrap();
+        assert_eq!(
+            (r["kept"].as_bool(), r["text"].as_str()),
+            (Some(false), Some("later\n"))
+        );
+    }
+
+    #[test]
+    fn a_symlinked_studio_folder_is_refused() {
+        let t = setup();
+        let dir = new_project(t.path(), "symlinked");
+        let outside = t.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, Path::new(&dir).join(".studio")).unwrap();
+        fs::write(Path::new(&dir).join("research/topic.md"), "x").unwrap();
+        let err = run(
+            "submit",
+            json!({"project": dir, "step": "research", "files": ["research/topic.md"]}),
+        )
+        .unwrap_err();
+        assert!(err.contains("outside the project folder"), "{err}");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+        let status = run("status", json!({"project": dir})).unwrap();
+        assert_eq!(status["steps"][0]["round"], 0);
     }
 
     #[test]
@@ -978,14 +1024,13 @@ mod tests {
         );
         assert_eq!(view["limits"]["description"], 5000);
         assert_eq!(view["error"], Value::Null);
-        // A sheet changed after submit shows what YouTube would refuse.
+        // A sheet changed after submit: the view is still the submitted one.
         fs::write(root.join(sheet::PATH), good.replace("[\"a\"]", "[\"a,b\"]")).unwrap();
         let view = run("sheet", json!({"project": dir})).unwrap();
-        assert!(
-            view["error"]
-                .as_str()
-                .unwrap()
-                .starts_with("tag 1 has a comma")
+        assert_eq!(
+            (view["kept"].as_bool(), &view["error"]),
+            (Some(true), &Value::Null)
         );
+        assert_eq!(view["tags"], json!(["a"]));
     }
 }

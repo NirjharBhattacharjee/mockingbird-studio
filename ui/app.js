@@ -179,20 +179,24 @@ async function drawText(box, path) {
   try {
     t = await op("round_text", { project: sel.project, step: sel.step, path });
   } catch (e) {
-    return showError(e);
+    if (key === previewKey) showError(e);
+    return;
   }
   if (key !== previewKey) return;
   const pre = el("pre");
+  const diff = el("div", null, { class: "diff" });
+  if (!t.kept) diff.append(el("p", "As on disk now: this round was submitted before rounds were kept.", { class: "diff-head" }));
+  if (t.diff === "too large") diff.append(el("p", `Too large to show the changes since round ${t.previous_round}.`, { class: "diff-head" }));
   if (!t.changes) {
     pre.textContent = t.text;
-    return box.replaceChildren(pre);
+    diff.append(pre);
+    return box.replaceChildren(diff);
   }
   const count = (c) => t.changes.filter(([m]) => m === c).length;
   const head = el("p", `Changes since round ${t.previous_round}: ${count("+")} new, ${count("-")} gone`, { class: "diff-head" });
   const MARK = { " ": "  ", "+": "+ ", "-": "− " };
   const CLASS = { " ": "same", "+": "add", "-": "del" };
   for (const [m, line] of t.changes) pre.append(el("span", `${MARK[m]}${line}`, { class: CLASS[m] }));
-  const diff = el("div", null, { class: "diff" });
   diff.append(head, pre);
   box.replaceChildren(diff);
 }
@@ -205,7 +209,8 @@ async function drawSheet(box) {
   try {
     s = await op("sheet", { project: sel.project });
   } catch (e) {
-    return showError(e);
+    if (key === previewKey) showError(e);
+    return;
   }
   if (key !== previewKey) return; // another file was picked meanwhile
   const yes = (b) => (b ? "yes" : "no");
@@ -217,6 +222,7 @@ async function drawSheet(box) {
     sheet.append(head, el(tag, text));
   };
   const sheet = el("div", null, { class: "sheet" });
+  if (!s.kept) sheet.append(el("p", "As on disk now: this round was submitted before rounds were kept.", { class: "declarations" }));
   if (s.error) sheet.append(el("p", `YouTube would refuse this sheet: ${s.error}`, { class: "error" }));
   part("Title", "p", s.title, s.counts.title, s.limits.title, "characters");
   part("Description", "pre", s.description, s.counts.description, s.limits.description, "bytes");

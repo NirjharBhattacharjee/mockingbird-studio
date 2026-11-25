@@ -2,32 +2,84 @@
 //! `.studio/rounds/<step>/<round>/<path>`, and a line diff between rounds.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use crate::project::{Kind, Output, Result, Step};
 
-fn copy_path(dir: &Path, step: &str, round: u32, rel: &str) -> PathBuf {
+/// Above this, a round's text comes back without a diff.
+const DIFF_BYTES: usize = 1_000_000;
+
+fn round_dir(dir: &Path, step: &str, round: u32) -> PathBuf {
     dir.join(".studio/rounds")
         .join(step)
         .join(round.to_string())
-        .join(rel)
 }
 
-/// Copies the text outputs of `step`'s round `round` into `.studio`.
+/// Refuses `path` if its deepest existing part resolves outside the project
+/// folder `dir`, as it would through a symlinked `.studio`. Checked before
+/// anything under it is made or removed.
+fn check_inside(dir: &Path, path: &Path) -> Result<()> {
+    let io = |e: std::io::Error| format!("{}: {e}", path.display());
+    let existing = path
+        .ancestors()
+        .find(|a| a.exists())
+        .expect("the project folder exists");
+    let real = existing.canonicalize().map_err(io)?;
+    if !real.starts_with(dir.canonicalize().map_err(io)?) {
+        return Err(format!("{} is outside the project folder", path.display()));
+    }
+    Ok(())
+}
+
+/// Copies the text outputs of `step`'s round `round` into `.studio`, in
+/// place of anything that round kept before.
 pub fn keep(dir: &Path, step: &str, round: u32, outputs: &[Output]) -> Result<()> {
+    let io = |e: std::io::Error| format!("can't keep round {round} of {step}: {e}");
+    let to_dir = round_dir(dir, step, round);
+    check_inside(dir, &to_dir)?;
+    match fs::remove_dir_all(&to_dir) {
+        Err(e) if e.kind() != ErrorKind::NotFound => return Err(io(e)),
+        _ => {}
+    }
     for o in outputs.iter().filter(|o| o.kind == Kind::Text) {
-        let to = copy_path(dir, step, round, &o.path);
-        let io = |e: std::io::Error| format!("can't keep {} for round {round}: {e}", o.path);
-        fs::create_dir_all(to.parent().expect("a joined path has a parent")).map_err(io)?;
+        let to = to_dir.join(&o.path);
+        let parent = to.parent().expect("a joined path has a parent");
+        check_inside(dir, parent)?;
+        fs::create_dir_all(parent).map_err(io)?;
+        check_inside(dir, parent)?;
+        match fs::remove_file(&to) {
+            Err(e) if e.kind() != ErrorKind::NotFound => return Err(io(e)),
+            _ => {}
+        }
         fs::copy(dir.join(&o.path), &to).map_err(io)?;
     }
     Ok(())
 }
 
+/// The kept copy of `rel` from `step`'s round `round`, or `None` if that
+/// round kept none.
+pub fn kept(dir: &Path, step: &str, round: u32, rel: &str) -> Result<Option<PathBuf>> {
+    let path = round_dir(dir, step, round).join(rel);
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Ok(_) => {}
+    }
+    check_inside(dir, &path)?;
+    Ok(Some(path))
+}
+
+fn read(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// The text of `rel` in `step`'s round `round` (the current one if `None`),
 /// and what changed since the last earlier round that kept the same file.
+/// `kept` is false when the round has no copy and the live file stands in.
 pub fn text(dir: &Path, step: &Step, rel: &str, round: Option<u32>) -> Result<Value> {
     if !Path::new(rel)
         .components()
@@ -36,24 +88,38 @@ pub fn text(dir: &Path, step: &Step, rel: &str, round: Option<u32>) -> Result<Va
         return Err(format!("{rel} is not a path inside the project folder"));
     }
     let round = round.unwrap_or(step.round);
-    let read = |r: u32| fs::read_to_string(copy_path(dir, &step.id, r, rel)).ok();
-    let text = match read(round) {
-        Some(t) => t,
+    let (text, is_kept) = match kept(dir, &step.id, round, rel)? {
+        Some(path) => (read(&path)?, true),
         // A round submitted before rounds were kept: the live file is all there is.
         None if round == step.round && step.outputs.iter().any(|o| o.path == rel) => {
-            fs::read_to_string(dir.join(rel)).map_err(|e| format!("{rel}: {e}"))?
+            (read(&dir.join(rel))?, false)
         }
         None => return Err(format!("no kept copy of {rel} in round {round}")),
     };
-    let previous = (1..round).rev().find_map(|r| read(r).map(|t| (r, t)));
-    Ok(json!({
+    let mut previous = None;
+    for r in (1..round).rev() {
+        if let Some(path) = kept(dir, &step.id, r, rel)? {
+            previous = Some((r, read(&path)?));
+            break;
+        }
+    }
+    let mut v = json!({
         "step": step.id,
         "path": rel,
         "round": round,
+        "kept": is_kept,
         "text": text,
         "previous_round": previous.as_ref().map(|(r, _)| r),
-        "changes": previous.as_ref().map(|(_, old)| diff(old, &text)),
-    }))
+        "changes": null,
+    });
+    if let Some((_, old)) = &previous {
+        if old.len().max(text.len()) > DIFF_BYTES {
+            v["diff"] = json!("too large");
+        } else {
+            v["changes"] = json!(diff(old, &text));
+        }
+    }
+    Ok(v)
 }
 
 /// A line diff from `old` to `new`: each line tagged ' ' kept, '-' gone or
