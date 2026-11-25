@@ -168,7 +168,12 @@ impl ServerHandler for Server {
         req: CallToolRequestParams,
         _: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        Ok(call(&req.name, req.arguments).into())
+        // On the blocking pool, so a long call (a sign-in waits for the
+        // browser) doesn't stop the server answering anything else.
+        tokio::task::spawn_blocking(move || call(&req.name, req.arguments))
+            .await
+            .map(Into::into)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }
 }
 

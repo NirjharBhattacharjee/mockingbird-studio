@@ -28,11 +28,16 @@ fn main() -> ExitCode {
 }
 
 /// The window's one command: an operation from the core table, recorded as
-/// coming from the window.
+/// coming from the window. It runs on the blocking pool, so a sign-in
+/// waiting on the browser freezes neither the window nor the async runtime.
 #[tauri::command]
-fn op(app: AppHandle, name: String, args: Value) -> Result<Value, String> {
-    let out = ops::dispatch(&name, &args, Via::Window)?;
-    if matches!(name.as_str(), "projects" | "project_new" | "project_add") {
+async fn op(app: AppHandle, name: String, args: Value) -> Result<Value, String> {
+    let lists = matches!(name.as_str(), "projects" | "project_new" | "project_add");
+    let out =
+        tauri::async_runtime::spawn_blocking(move || ops::dispatch(&name, &args, Via::Window))
+            .await
+            .map_err(|e| e.to_string())??;
+    if lists {
         allow_listed(&app);
     }
     Ok(out)

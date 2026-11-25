@@ -481,6 +481,7 @@ function setSettingsPage(open) {
     media()?.pause();
     $("settings-error").textContent = "";
     refreshNiches();
+    refreshChannels();
   }
 }
 
@@ -592,4 +593,32 @@ $("niche-form").onsubmit = async (e) => {
   e.preventDefault();
   await nicheOp("niche_add", { name: $("niche-name").value });
   if (!$("settings-error").textContent) $("niche-name").value = "";
+};
+
+// Sign in to YouTube. The reply says only whether a label is signed in;
+// no operation returns a token.
+async function refreshChannels() {
+  try {
+    const { channels } = await op("youtube_status");
+    $("channels").replaceChildren(...channels.map((c) =>
+      el("li", `${c.label}: ${c.signed_in ? "signed in" : "not signed in"}${c.title ? ` (${c.title})` : ""}`)));
+  } catch (e) {
+    $("youtube-error").textContent = String(e);
+  }
+}
+
+$("signin-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector("button");
+  button.disabled = true;
+  button.textContent = "Waiting up to 5 minutes for the browser…";
+  $("youtube-error").textContent = "";
+  try {
+    await op("youtube_connect", { label: $("signin-label").value, client_file: $("signin-file").value });
+  } catch (err) {
+    $("youtube-error").textContent = String(err);
+  }
+  button.disabled = false;
+  button.textContent = "Sign in";
+  refreshChannels();
 };

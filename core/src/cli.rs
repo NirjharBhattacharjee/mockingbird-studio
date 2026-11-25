@@ -30,7 +30,7 @@ fn build() -> Command {
         );
         for a in op.args {
             let mut arg = Arg::new(a.name)
-                .long(a.name)
+                .long(command_name(a.name))
                 .help(a.help)
                 .required(a.required);
             match a.kind {

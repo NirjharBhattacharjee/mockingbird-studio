@@ -32,6 +32,8 @@ pub struct Config {
     pub projects: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub niche: Vec<crate::niche::Niche>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel: Vec<crate::youtube::Channel>,
     #[serde(flatten)]
     pub rest: toml::Table,
 }

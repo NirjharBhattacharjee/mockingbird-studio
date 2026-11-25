@@ -166,3 +166,7 @@ body.jobs main, body.jobs aside, body.settings main, body.settings aside { displ
 .niche .row input { flex: 1; }
 #niche-form { display: flex; gap: 8px; align-items: center; }
 #niche-form input { flex: 1; max-width: 320px; }
+#signin-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#signin-form input { flex: 1; min-width: 120px; max-width: 320px; }
+#channels { margin: 0; padding-left: 20px; }
+#youtube-error { color: #d70015; margin: 0; }
