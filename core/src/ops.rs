@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::jobs;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
+use crate::rounds;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
 
@@ -214,6 +215,17 @@ pub const OPS: &[Op] = &[
         help: "The description step's sheet as YouTube lays it out: the description with its chapter lines, and the counts YouTube limits.",
         args: &[PROJECT],
         run: sheet,
+    },
+    Op {
+        name: "round_text",
+        help: "A text output as it was submitted in a round, and the lines changed since the round before it.",
+        args: &[
+            PROJECT,
+            STEP,
+            req("path", Text, "The file, relative to the project folder."),
+            opt("round", Integer, "The round; the current one if left out."),
+        ],
+        run: round_text,
     },
 ];
 
@@ -454,7 +466,9 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
             "description" => sheet::check_submit(&dir, &paths)?,
             _ => {}
         }
-        Ok(json!(p.step(&step)?))
+        let s = p.step(&step)?;
+        rounds::keep(&dir, &step, s.round, &s.outputs)?;
+        Ok(json!(s))
     })
 }
 
@@ -594,6 +608,13 @@ fn sheet(a: &Args, _: Via) -> Result<Value> {
     }))
 }
 
+fn round_text(a: &Args, _: Via) -> Result<Value> {
+    let dir = a.project()?;
+    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
+    let round = a.number("round").map(|r| r as u32);
+    rounds::text(&dir, p.step(&a.text("step"))?, &a.text("path"), round)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,7 +663,8 @@ mod tests {
                 "jobs",
                 "job",
                 "job_cancel",
-                "sheet"
+                "sheet",
+                "round_text"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
@@ -850,6 +872,48 @@ mod tests {
         assert_eq!(status["steps"][0]["last_decision"]["decision"], "approved");
         let n = run("notes", p(json!({}))).unwrap();
         assert_eq!(n, json!({"notes": [], "redo": []}));
+    }
+
+    #[test]
+    fn a_round_keeps_its_text_and_shows_what_changed() {
+        let t = setup();
+        let dir = new_project(t.path(), "rounds");
+        let file = Path::new(&dir).join("research/topic.md");
+        let args = json!({"project": dir, "step": "research", "files": ["research/topic.md"]});
+        let text = |extra: Value| {
+            let mut v = json!({"project": dir, "step": "research", "path": "research/topic.md"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            run("round_text", v)
+        };
+        fs::write(&file, "one\ntwo\n").unwrap();
+        run("submit", args.clone()).unwrap();
+        let r = text(json!({})).unwrap();
+        assert_eq!(
+            (r["round"].as_u64(), r["changes"].is_null()),
+            (Some(1), true)
+        );
+
+        run(
+            "redo",
+            json!({"project": dir, "step": "research", "note": "more"}),
+        )
+        .unwrap();
+        fs::write(&file, "one\nthree\n").unwrap();
+        run("submit", args).unwrap();
+        // The agent edits the file after submitting: the round still shows what it got.
+        fs::write(&file, "later\n").unwrap();
+        let r = text(json!({})).unwrap();
+        assert_eq!(r["text"], "one\nthree\n");
+        assert_eq!(r["previous_round"], 1);
+        assert_eq!(
+            r["changes"],
+            json!([[" ", "one"], ["-", "two"], ["+", "three"]])
+        );
+        assert_eq!(text(json!({"round": 1})).unwrap()["text"], "one\ntwo\n");
+        assert!(text(json!({"round": 3})).is_err());
+        assert!(text(json!({"path": "../rounds/research/topic.md"})).is_err());
     }
 
     #[test]

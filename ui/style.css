@@ -72,6 +72,11 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 #preview audio { margin: auto; width: 90%; }
 #preview embed { flex: 1; }
 #preview p { margin: auto; color: var(--soft); }
+#preview .diff { flex: 1; display: flex; flex-direction: column; }
+#preview .diff-head { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+#preview .diff span { display: block; }
+#preview .diff .add { background: rgb(52 199 89 / 0.18); }
+#preview .diff .del { background: rgb(255 59 48 / 0.15); text-decoration: line-through; }
 
 #files { display: flex; flex-wrap: wrap; gap: 6px; }
 #files button[aria-pressed="true"] { border-color: var(--accent); }

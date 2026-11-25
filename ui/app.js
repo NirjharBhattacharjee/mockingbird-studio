@@ -142,18 +142,12 @@ function drawPreview(out, round) {
   box.classList.remove("thumb");
   if (!out) return;
   // status.project is the canonical folder, which is what the scope allows.
-  const src = convertFileSrc(`${status.project}/${out.path}`);
-  const url = `${src}?r=${round}`; // a new round of the same file name isn't served from cache
+  const url = `${convertFileSrc(`${status.project}/${out.path}`)}?r=${round}`; // a new round of the same file name isn't served from cache
   if (out.path === "description/sheet.toml") return drawSheet(box);
   switch (out.kind) {
-    case "text": {
-      const pre = el("pre");
-      box.append(pre);
-      fetch(src, { cache: "no-store" })
-        .then((r) => (r.ok ? r.text() : Promise.reject(`${out.path}: ${r.status}`)))
-        .then((t) => (pre.textContent = t), showError);
+    case "text":
+      drawText(box, out.path);
       break;
-    }
     case "image": {
       const full = el("img", null, { src: url, alt: out.path });
       if (sel.step !== "thumbnail") return box.append(full);
@@ -175,6 +169,32 @@ function drawPreview(out, round) {
     default:
       box.append(el("p", `No preview for ${out.path}.`));
   }
+}
+
+// A text file as it was submitted this round, not as it is on disk now.
+// After the first round, each line is marked kept, gone (−) or new (+).
+async function drawText(box, path) {
+  const key = previewKey;
+  let t;
+  try {
+    t = await op("round_text", { project: sel.project, step: sel.step, path });
+  } catch (e) {
+    return showError(e);
+  }
+  if (key !== previewKey) return;
+  const pre = el("pre");
+  if (!t.changes) {
+    pre.textContent = t.text;
+    return box.replaceChildren(pre);
+  }
+  const count = (c) => t.changes.filter(([m]) => m === c).length;
+  const head = el("p", `Changes since round ${t.previous_round}: ${count("+")} new, ${count("-")} gone`, { class: "diff-head" });
+  const MARK = { " ": "  ", "+": "+ ", "-": "− " };
+  const CLASS = { " ": "same", "+": "add", "-": "del" };
+  for (const [m, line] of t.changes) pre.append(el("span", `${MARK[m]}${line}`, { class: CLASS[m] }));
+  const diff = el("div", null, { class: "diff" });
+  diff.append(head, pre);
+  box.replaceChildren(diff);
 }
 
 // The description sheet as YouTube lays it out, each part with its count

@@ -295,8 +295,11 @@ edited or removed, so the file is the record AGENTS.md asks for: every
 approval with its time, and everything that was posted because of one.
 
 A step's `output` list is the current round's. Older rounds stay in
-`decision` and `note`. Keeping old text so the window can show what changed
-between rounds is a task in M2.
+`decision` and `note`. From M2, `submit` also copies each text output to
+`.studio/rounds/<step>/<round>/<path>`. `round_text` (project, step, path,
+round?) returns that copy and a line diff against the last earlier round
+that kept the same file, and the window shows the diff, so a text preview
+is always what was submitted, not what's on disk now.
 
 ### Step states
 
