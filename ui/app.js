@@ -130,16 +130,61 @@ function drawStep() {
     files.append(b);
   }
   drawPreview(s?.output?.find((o) => o.path === sel.file), s?.round);
+  drawTimeline(s);
 }
+
+// The step's audio and video outputs in order, each as wide as its length,
+// with its segments as ticks and its open notes as pins. A click seeks.
+function drawTimeline(s) {
+  const strip = $("timeline");
+  strip.replaceChildren();
+  const outs = (s?.output ?? []).filter((o) => o.duration > 0);
+  strip.hidden = !outs.length;
+  const notes = (status?.open_notes ?? []).filter((n) => n.step === sel.step && n.at != null);
+  for (const o of outs) {
+    const clip = el("div", null, { class: "clip", title: o.path });
+    if (o.path === sel.file) clip.classList.add("current");
+    clip.style.flexGrow = o.duration;
+    const pct = (t) => `${(Math.min(Math.max(t, 0), o.duration) / o.duration) * 100}%`;
+    for (const g of o.segments ?? []) {
+      const seg = el("span", g.label, { class: "segment", title: `${g.label}, ${clock(g.from)}–${clock(g.to)}` });
+      seg.style.left = pct(g.from);
+      seg.style.width = `calc(${pct(g.to)} - ${pct(g.from)})`;
+      clip.append(seg);
+    }
+    for (const n of notes.filter((n) => n.path === o.path)) {
+      const pin = el("button", null, { type: "button", class: "pin", title: n.text, "aria-label": `Note at ${clock(n.at)}: ${n.text}` });
+      pin.style.left = pct(n.at);
+      pin.onclick = (e) => {
+        e.stopPropagation();
+        seek(n);
+      };
+      clip.append(pin);
+    }
+    clip.onclick = (e) => {
+      const r = clip.getBoundingClientRect();
+      seek({ path: o.path, at: ((e.clientX - r.left) / r.width) * o.duration });
+    };
+    strip.append(clip);
+  }
+}
+
+// The newest job making this output's preview copy, if the list has one.
+const proxyJob = (out) =>
+  (status?.jobs ?? [])
+    .filter((j) => j.kind === "proxy" && j.values?.out === out.proxy)
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .pop();
 
 // A file is shown with the element WebKit already has for its kind.
 function drawPreview(out, round) {
-  const key = out ? `${sel.project}|${out.path}|${round}` : "";
+  const copy = out?.proxy ? (proxyJob(out)?.state ?? "done") : "";
+  const key = out ? `${sel.project}|${out.path}|${round}|${copy}` : "";
   if (key === previewKey) return;
   previewKey = key;
   const box = $("preview");
   box.replaceChildren();
-  box.classList.remove("thumb");
+  box.classList.remove("thumb", "proxied");
   if (!out) return;
   // status.project is the canonical folder, which is what the scope allows.
   const url = `${convertFileSrc(`${status.project}/${out.path}`)}?r=${round}`; // a new round of the same file name isn't served from cache
@@ -160,9 +205,19 @@ function drawPreview(out, round) {
       break;
     }
     case "audio":
-    case "video":
-      box.append(el(out.kind, null, { src: url, controls: "", preload: "metadata" }));
+    case "video": {
+      if (!out.proxy) return box.append(el(out.kind, null, { src: url, controls: "", preload: "metadata" }));
+      // WebKit can't play the original: play the H.264 copy and say so.
+      if (copy === "queued" || copy === "running") return box.append(el("p", "Making a preview copy: this file doesn't play here as it is."));
+      if (copy !== "done") return box.append(el("p", `No preview copy: ${proxyJob(out).error ?? copy}.`));
+      const src = `${convertFileSrc(`${status.project}/${out.proxy}`)}?r=${round}`;
+      box.append(
+        el("p", "Preview copy, made because this file doesn't play here as it is. The original is unchanged.", { class: "proxy-label" }),
+        el(out.kind, null, { src, controls: "", preload: "metadata" }),
+      );
+      box.classList.add("proxied");
       break;
+    }
     case "pdf":
       box.append(el("embed", null, { src: url, type: "application/pdf" }));
       break;

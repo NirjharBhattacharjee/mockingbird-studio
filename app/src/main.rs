@@ -56,8 +56,11 @@ fn allow_listed(app: &AppHandle) {
         // The protocol canonicalizes each request, so the scope must be canonical too.
         match dir.canonicalize() {
             Ok(dir) => {
-                if let Err(e) = scope.allow_directory(&dir, true) {
-                    eprintln!("can't allow {}: {e}", dir.display());
+                // `**` skips dot-folders, so preview copies are allowed by name.
+                for d in [dir.clone(), dir.join(".studio/proxies")] {
+                    if let Err(e) = scope.allow_directory(&d, true) {
+                        eprintln!("can't allow {}: {e}", d.display());
+                    }
                 }
             }
             Err(e) => eprintln!("can't allow {}: {e}", dir.display()),

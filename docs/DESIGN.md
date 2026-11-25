@@ -537,8 +537,11 @@ without it the runner looks on its `PATH`.
   Without ffprobe, submit records no lengths and works as before.
 - A timeline isn't a new entity. It's a step's outputs in order, each as
   wide as its length, with its segments as ticks and its notes as pins. The
-  agent passes the segments with `submit`, since it wrote the shot list.
-  Clicking the strip seeks.
+  agent passes the segments with `submit`, since it wrote the shot list:
+  `segments` is JSON from each file's path to its list of
+  `{label, from, to}`, in seconds. Clicking the strip seeks. Only outputs
+  with a `duration` are on the strip. The asset scope allows each project's
+  `.studio/proxies/` by name, since a folder glob skips dot-folders.
 
 ## Publishing (M3)
 
