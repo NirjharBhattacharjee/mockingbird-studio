@@ -314,7 +314,7 @@ $("redo-dialog").onclose = async () => {
 document.addEventListener("keydown", (e) => {
   const m = media();
   const typing = e.target.closest("input, textarea, dialog");
-  if (!m || typing || e.target === m || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (jobsOpen() || !m || typing || e.target === m || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === " ") {
     e.preventDefault();
     m.paused ? m.play() : m.pause();
@@ -341,6 +341,10 @@ let jobSel = null;
 let jobLog = null; // the selected job as `job` returned it, with its log
 let jobsShown = "";
 let jobsAsked = 0;
+const stopping = new Set(); // jobs cancelled here that haven't changed state yet
+let jobsError = ""; // from the last refresh; clears on the next good one
+let cancelError = ""; // from a cancel; stays until another job is picked
+let pendingStop = null; // the job the confirmation dialog is about
 
 const jobsOpen = () => document.body.classList.contains("jobs");
 
@@ -348,8 +352,16 @@ function setJobsPage(open) {
   document.body.classList.toggle("jobs", open);
   $("jobs-page").hidden = !open;
   $("jobs-button").setAttribute("aria-pressed", String(open));
-  if (open) refreshJobs();
+  if (open) {
+    media()?.pause(); // the player is hidden, so it must not keep playing
+    refreshJobs();
+  }
 }
+
+const showJobError = () => ($("job-error").textContent = cancelError || jobsError);
+
+// Every job names itself the same way in the list, the dialog and the label.
+const jobWhat = (j) => [j.tool, j.project?.split("/").filter(Boolean).pop(), j.step].filter(Boolean).join(" · ");
 
 async function refreshJobs() {
   const n = ++jobsAsked;
@@ -358,13 +370,16 @@ async function refreshJobs() {
     if (n !== jobsAsked) return;
     jobList = list;
     if (!list.some((j) => j.id === jobSel)) jobSel = (list.find((j) => j.state === "running") ?? list.find((j) => j.state === "queued") ?? list[0])?.id ?? null;
+    for (const id of stopping) if (!list.some((j) => j.id === id && ACTIVE.includes(j.state))) stopping.delete(id);
+    jobLog = null; // so a failed read can't leave another job's log under this one
     jobLog = jobSel ? await op("job", { id: jobSel }) : null;
     if (n !== jobsAsked) return;
-    $("job-error").textContent = "";
+    jobsError = "";
   } catch (e) {
     if (n !== jobsAsked) return;
-    $("job-error").textContent = String(e);
+    jobsError = String(e);
   }
+  showJobError();
   drawJobs();
 }
 
@@ -375,7 +390,7 @@ function jobTimes(j) {
 }
 
 function drawJobs() {
-  const now = JSON.stringify([jobList, jobSel, jobLog]);
+  const now = JSON.stringify([jobList, jobSel, jobLog, [...stopping]]);
   if (now === jobsShown) return;
   jobsShown = now;
   const list = $("jobs");
@@ -386,23 +401,24 @@ function drawJobs() {
     const pick = el("button", null, { type: "button", "aria-pressed": String(j.id === jobSel) });
     pick.append(
       el("span", j.state, { class: "state" }),
-      el("span", [j.tool, j.step].filter(Boolean).join(" · "), { class: "what" }),
+      el("span", jobWhat(j), { class: "what" }),
       el("span", jobTimes(j), { class: "when" }),
     );
     pick.onclick = () => {
+      if (jobSel !== j.id) cancelError = "";
       jobSel = j.id;
       refreshJobs();
     };
     li.append(pick);
-    if (ACTIVE.includes(j.state)) {
-      const stop = el("button", "Cancel", { type: "button", "aria-label": `Cancel ${j.tool} ${j.id}` });
-      stop.onclick = async () => {
-        try {
-          await op("job_cancel", { id: j.id });
-          await refreshJobs();
-        } catch (e) {
-          $("job-error").textContent = String(e);
-        }
+    if (stopping.has(j.id)) {
+      li.append(el("span", "stopping…", { class: "stopping" }));
+    } else if (ACTIVE.includes(j.state)) {
+      const stop = el("button", "Cancel", { type: "button", "aria-label": `Cancel ${jobWhat(j)}` });
+      stop.onclick = () => {
+        pendingStop = j;
+        $("stop-text").textContent = `Stop ${jobWhat(j)}? It can't be resumed.`;
+        $("stop-dialog").returnValue = ""; // so Escape can't stop the last one asked about
+        $("stop-dialog").showModal();
       };
       li.append(stop);
     }
@@ -422,4 +438,25 @@ function drawJobs() {
 $("jobs-button").onclick = () => setJobsPage(!jobsOpen());
 // Picking a step goes back to the step page.
 $("projects").addEventListener("click", () => setJobsPage(false), true);
-setInterval(() => jobsOpen() && !document.hidden && refreshJobs(), 2000);
+
+$("stop-dialog").onclose = async () => {
+  const j = pendingStop;
+  pendingStop = null;
+  if ($("stop-dialog").returnValue !== "stop" || !j) return;
+  cancelError = "";
+  try {
+    await op("job_cancel", { id: j.id });
+    stopping.add(j.id);
+  } catch (e) {
+    cancelError = String(e);
+  }
+  showJobError();
+  refreshJobs();
+};
+
+// Every 2 seconds while a job is queued or running, every 10 when nothing is.
+async function pollJobs() {
+  if (jobsOpen() && !document.hidden) await refreshJobs();
+  setTimeout(pollJobs, jobList.some((j) => ACTIVE.includes(j.state)) ? 2000 : 10000);
+}
+pollJobs();

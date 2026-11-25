@@ -150,3 +150,4 @@ body.jobs main, body.jobs aside { display: none; }
 #jobs .outputs { color: var(--soft); }
 #job-log { flex: 1; min-height: 160px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--line); border-radius: 8px; font: 12px/1.5 ui-monospace, Menlo, monospace; }
 #job-error { color: #d70015; margin: 0; }
+#jobs .stopping { color: var(--soft); padding: 0 12px; }
