@@ -468,6 +468,7 @@ let nicheList = [];
 let settingsShown = "";
 let settingsAsked = 0;
 const VISIBILITY = ["private", "unlisted", "public"];
+let pendingRemove = null; // the niche the confirmation dialog is about
 
 const settingsOpen = () => document.body.classList.contains("settings");
 
@@ -478,20 +479,26 @@ function setSettingsPage(open) {
   if (open) {
     setJobsPage(false);
     media()?.pause();
+    $("settings-error").textContent = "";
     refreshNiches();
   }
 }
 
-// Runs one niche operation, then redraws. A refused change shows its reason
-// and the page goes back to what is stored.
-async function nicheOp(name, args) {
+// Runs one niche operation, then redraws. A refused change shows its reason;
+// the page then shows what is stored, except text typed and not yet saved.
+// `clear` is the input to empty when the change worked.
+let cleared = null;
+async function nicheOp(name, args, clear = null) {
   $("settings-error").textContent = "";
+  let failed = "";
   try {
     await op(name, args);
   } catch (e) {
-    $("settings-error").textContent = String(e);
+    failed = String(e);
   }
+  cleared = failed ? null : clear;
   await refreshNiches(true);
+  if (failed) $("settings-error").textContent = failed;
 }
 
 async function refreshNiches(force = false) {
@@ -500,6 +507,7 @@ async function refreshNiches(force = false) {
     const list = (await op("niches")).niches;
     if (n !== settingsAsked) return;
     nicheList = list;
+    $("settings-error").textContent = "";
   } catch (e) {
     if (n !== settingsAsked) return;
     $("settings-error").textContent = String(e);
@@ -513,6 +521,12 @@ function drawNiches() {
   if (now === settingsShown) return;
   settingsShown = now;
   const box = $("niches");
+  // A redraw replaces every card, so keep what was typed and not saved, and
+  // where the cursor was.
+  const typed = {};
+  for (const i of box.querySelectorAll("input")) if (i.id && i.id !== cleared && i.value !== i.defaultValue) typed[i.id] = i.value;
+  const had = document.activeElement;
+  const focus = box.contains(had) && had.id ? { id: had.id, from: had.selectionStart, to: had.selectionEnd } : null;
   box.replaceChildren();
   if (!nicheList.length) box.append(el("p", "No niches yet.", { class: "hint" }));
   for (const n of nicheList) {
@@ -541,21 +555,37 @@ function drawNiches() {
       li.append(el("span", url), gone);
       feeds.append(li);
     }
-    card.append(el("label", "Feeds"), feeds);
+    card.append(el("label", "Feeds", { for: `niche-${n.id}-newfeed` }), feeds);
     const row = el("form", null, { class: "row" });
-    const url = el("input", null, { type: "url", required: "", placeholder: "https://example.com/feed.xml", "aria-label": `New feed for ${n.name}` });
+    const url = el("input", null, { id: `niche-${n.id}-newfeed`, type: "url", required: "", placeholder: "https://example.com/feed.xml", "aria-label": `New feed for ${n.name}` });
     row.append(url, el("button", "Add feed", { type: "submit" }));
     row.onsubmit = (e) => {
       e.preventDefault();
-      nicheOp("feed_add", { niche: n.id, url: url.value });
+      nicheOp("feed_add", { niche: n.id, url: url.value }, url.id);
     };
     const rm = el("button", `Remove ${n.name}`, { type: "button" });
-    rm.onclick = () => nicheOp("niche_remove", { niche: n.id });
+    rm.onclick = () => {
+      pendingRemove = n;
+      $("remove-text").textContent = `Remove ${n.name} and its feed list? Projects that name it keep the name.`;
+      $("remove-dialog").returnValue = ""; // so Escape can't remove the last one asked about
+      $("remove-dialog").showModal();
+    };
     card.append(row, el("div", null, { class: "row" }));
     card.lastChild.append(rm);
     box.append(card);
   }
+  for (const [id, value] of Object.entries(typed)) if ($(id)) $(id).value = value;
+  if (focus && $(focus.id)) {
+    $(focus.id).focus();
+    if (focus.from != null) $(focus.id).setSelectionRange?.(focus.from, focus.to);
+  }
 }
+
+$("remove-dialog").onclose = () => {
+  const n = pendingRemove;
+  pendingRemove = null;
+  if ($("remove-dialog").returnValue === "remove" && n) nicheOp("niche_remove", { niche: n.id });
+};
 
 $("settings-button").onclick = () => setSettingsPage(!settingsOpen());
 $("niche-form").onsubmit = async (e) => {

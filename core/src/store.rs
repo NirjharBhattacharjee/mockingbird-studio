@@ -49,7 +49,9 @@ pub fn read<T: DeserializeOwned>(path: &Path) -> Result<T> {
 pub fn read_config() -> Result<Config> {
     let path = config_path();
     if path.exists() {
-        read(&path)
+        let mut c: Config = read(&path)?;
+        crate::niche::tidy(&mut c.niche);
+        Ok(c)
     } else {
         Ok(Config::default())
     }

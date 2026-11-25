@@ -179,6 +179,8 @@ fn a_visibility_set_from_the_cli_is_read_through_mcp() {
     assert_eq!(r["niches"][0]["visibility"], "unlisted");
     // A niche with no feeds still says so, for the window.
     assert!(cli(&["niche-add", "--name", "Empty"]).0);
+    let (ok, err) = cli(&["niche-set", "--niche", "ai-news", "--name", "EMPTY"]);
+    assert!(!ok && err.contains("already the name or id"), "{err}");
     assert_eq!(
         c.call("niches", json!({})).0["niches"][1]["feeds"],
         json!([])
