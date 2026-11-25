@@ -9,6 +9,7 @@
 </head>
 <body>
   <nav aria-label="Projects">
+    <button id="jobs-button" type="button" aria-pressed="false">Jobs</button>
     <h2>Projects</h2>
     <ul id="projects"></ul>
   </nav>
@@ -24,6 +25,14 @@
     </div>
     <p id="error" role="alert"></p>
   </main>
+
+  <section id="jobs-page" aria-label="Jobs" hidden>
+    <h1>Jobs</h1>
+    <ul id="jobs"></ul>
+    <h2 id="job-heading">Log</h2>
+    <pre id="job-log" tabindex="0"></pre>
+    <p id="job-error" role="alert"></p>
+  </section>
 
   <aside aria-label="Notes">
     <h2>Notes</h2>

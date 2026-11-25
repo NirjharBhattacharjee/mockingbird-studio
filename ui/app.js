@@ -332,3 +332,94 @@ document.addEventListener("click", (e) => e.target.closest?.("button")?.blur());
 
 refresh();
 setInterval(() => document.hidden || refresh(), 2000);
+
+// The jobs page: every job, the end of the selected job's log, and cancel.
+// It has its own button, polling and state, apart from the step page above.
+const ACTIVE = ["queued", "running"];
+let jobList = [];
+let jobSel = null;
+let jobLog = null; // the selected job as `job` returned it, with its log
+let jobsShown = "";
+let jobsAsked = 0;
+
+const jobsOpen = () => document.body.classList.contains("jobs");
+
+function setJobsPage(open) {
+  document.body.classList.toggle("jobs", open);
+  $("jobs-page").hidden = !open;
+  $("jobs-button").setAttribute("aria-pressed", String(open));
+  if (open) refreshJobs();
+}
+
+async function refreshJobs() {
+  const n = ++jobsAsked;
+  try {
+    const list = (await op("jobs")).jobs.reverse(); // newest first
+    if (n !== jobsAsked) return;
+    jobList = list;
+    if (!list.some((j) => j.id === jobSel)) jobSel = (list.find((j) => j.state === "running") ?? list.find((j) => j.state === "queued") ?? list[0])?.id ?? null;
+    jobLog = jobSel ? await op("job", { id: jobSel }) : null;
+    if (n !== jobsAsked) return;
+    $("job-error").textContent = "";
+  } catch (e) {
+    if (n !== jobsAsked) return;
+    $("job-error").textContent = String(e);
+  }
+  drawJobs();
+}
+
+function jobTimes(j) {
+  const t = (x) => new Date(x).toLocaleTimeString();
+  if (j.ended) return `${t(j.started ?? j.created)} to ${t(j.ended)}`;
+  return j.started ? `since ${t(j.started)}` : `queued ${t(j.created)}`;
+}
+
+function drawJobs() {
+  const now = JSON.stringify([jobList, jobSel, jobLog]);
+  if (now === jobsShown) return;
+  jobsShown = now;
+  const list = $("jobs");
+  list.replaceChildren();
+  if (!jobList.length) list.append(el("li", "No jobs yet. Your agent starts them.", { class: "empty" }));
+  for (const j of jobList) {
+    const li = el("li", null, { class: `job ${j.state}` });
+    const pick = el("button", null, { type: "button", "aria-pressed": String(j.id === jobSel) });
+    pick.append(
+      el("span", j.state, { class: "state" }),
+      el("span", [j.tool, j.step].filter(Boolean).join(" · "), { class: "what" }),
+      el("span", jobTimes(j), { class: "when" }),
+    );
+    pick.onclick = () => {
+      jobSel = j.id;
+      refreshJobs();
+    };
+    li.append(pick);
+    if (ACTIVE.includes(j.state)) {
+      const stop = el("button", "Cancel", { type: "button", "aria-label": `Cancel ${j.tool} ${j.id}` });
+      stop.onclick = async () => {
+        try {
+          await op("job_cancel", { id: j.id });
+          await refreshJobs();
+        } catch (e) {
+          $("job-error").textContent = String(e);
+        }
+      };
+      li.append(stop);
+    }
+    if (j.error) li.append(el("p", j.error, { class: "error" }));
+    if (j.outputs?.length) li.append(el("p", `Wrote ${j.outputs.join(", ")}`, { class: "outputs" }));
+    list.append(li);
+  }
+  $("job-heading").textContent = jobLog ? `Log · ${jobLog.tool} ${jobLog.id}` : "Log";
+  const log = $("job-log");
+  // Follow the end of the log, unless the reader scrolled up in the same job.
+  const follow = log.dataset.id !== jobLog?.id || log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.dataset.id = jobLog?.id ?? "";
+  log.textContent = jobLog ? jobLog.log || "No output yet." : "";
+  if (follow) log.scrollTop = log.scrollHeight;
+}
+
+$("jobs-button").onclick = () => setJobsPage(!jobsOpen());
+// Picking a step goes back to the step page.
+$("projects").addEventListener("click", () => setJobsPage(false), true);
+setInterval(() => jobsOpen() && !document.hidden && refreshJobs(), 2000);
