@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::mockingbird;
 use crate::project::Result;
 use crate::store;
 
@@ -62,6 +63,9 @@ pub struct Job {
     /// The values given for the tool's placeholders.
     #[serde(default)]
     pub values: BTreeMap<String, String>,
+    /// A `mockingbird` job's tool arguments, as JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
     #[serde(flatten)]
     pub rest: toml::Table,
 }
@@ -288,10 +292,63 @@ pub fn start(
 ) -> Result<Job> {
     let command = fill(&declared(tool)?, &values, project.as_deref())
         .map_err(|e| format!("tool {tool:?} {e}"))?;
+    queue("tool", tool, command, project, step, values, None)
+}
+
+/// Queues a `mockingbird` job: one call to `tool` with `args`, a JSON
+/// object, through `mockingbird-studio mockingbird-call`.
+pub fn start_mockingbird(
+    tool: &str,
+    args: &str,
+    project: Option<PathBuf>,
+    step: Option<String>,
+) -> Result<Job> {
+    if !mockingbird::TOOLS.contains(&tool) {
+        return Err(format!(
+            "a mockingbird job calls one of: {}",
+            mockingbird::TOOLS.join(", ")
+        ));
+    }
+    let args = match serde_json::from_str::<serde_json::Value>(args) {
+        Ok(v) if v.is_object() => v.to_string(),
+        _ => {
+            return Err(
+                "args: a mockingbird job needs its tool's arguments as a JSON object".into(),
+            );
+        }
+    };
+    let exe = std::env::current_exe().map_err(|e| format!("can't find this program: {e}"))?;
+    let command = vec![
+        exe.to_string_lossy().into_owned(),
+        "mockingbird-call".into(),
+        mockingbird::program(),
+        tool.into(),
+        args.clone(),
+    ];
+    queue(
+        "mockingbird",
+        tool,
+        command,
+        project,
+        step,
+        BTreeMap::new(),
+        Some(args),
+    )
+}
+
+fn queue(
+    kind: &str,
+    tool: &str,
+    command: Vec<String>,
+    project: Option<PathBuf>,
+    step: Option<String>,
+    values: BTreeMap<String, String>,
+    args: Option<String>,
+) -> Result<Job> {
     let now = Timestamp::now();
     let job = Job {
         id: new_dir(now)?,
-        kind: "tool".into(),
+        kind: kind.into(),
         tool: tool.into(),
         command,
         project,
@@ -304,6 +361,7 @@ pub fn start(
         outputs: vec![],
         error: None,
         values,
+        args,
         rest: Default::default(),
     };
     // Written before the runner check, so a runner on its way out sees it.
@@ -495,6 +553,23 @@ fn finish(r: &mut Running, status: std::io::Result<ExitStatus>) {
                 .filter(|(k, v)| is_out(k) && cwd.join(v).is_file())
                 .map(|(_, v)| v.clone())
                 .collect();
+            // mockingbird's `out` is absolute: kept relative when it's inside.
+            let out = job
+                .args
+                .as_deref()
+                .and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok())
+                .and_then(|a| a["out"].as_str().map(PathBuf::from))
+                .and_then(|p| p.canonicalize().ok())
+                .filter(|p| p.is_file());
+            if let Some(out) = out {
+                let inside = cwd.canonicalize().ok().and_then(|c| {
+                    out.strip_prefix(c)
+                        .ok()
+                        .map(|p| p.to_string_lossy().into_owned())
+                });
+                job.outputs
+                    .push(inside.unwrap_or_else(|| out.to_string_lossy().into_owned()));
+            }
         }
         _ if r.term_at.is_some() => job.state = JobState::Cancelled,
         Ok(s) => {

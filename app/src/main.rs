@@ -12,6 +12,7 @@ fn main() -> ExitCode {
         Some("mcp") => return studio_core::mcp::run(),
         Some("runner") => return studio_core::jobs::run_runner(),
         Some("setup") => return studio_core::setup::run(&args[1..]),
+        Some("mockingbird-call") => return studio_core::mockingbird::run_call(&args[1..]),
         Some(_) => return studio_core::cli::run(&args),
         None => {}
     }
