@@ -30,6 +30,8 @@ pub fn home() -> PathBuf {
 pub struct Config {
     #[serde(default)]
     pub projects: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub niche: Vec<crate::niche::Niche>,
     #[serde(flatten)]
     pub rest: toml::Table,
 }
