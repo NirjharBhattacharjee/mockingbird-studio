@@ -44,6 +44,16 @@
       <input id="niche-name" required placeholder="AI news">
       <button type="submit">Add niche</button>
     </form>
+    <h1>YouTube</h1>
+    <p class="hint">Sign in with the OAuth client from your own Google Cloud project (docs/YOUTUBE.md). Google's page opens in your browser.</p>
+    <ul id="channels"></ul>
+    <form id="signin-form">
+      <label for="signin-label">Label</label>
+      <input id="signin-label" required value="main">
+      <label for="signin-file">Client file</label>
+      <input id="signin-file" required placeholder="/Users/you/Downloads/client_secret.json">
+      <button type="submit">Sign in</button>
+    </form>
     <p id="settings-error" role="alert"></p>
   </section>
 
