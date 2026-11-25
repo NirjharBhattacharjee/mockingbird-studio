@@ -56,7 +56,7 @@ for your own use; you'll see a warning on the consent page instead (step 6).
 ## 6. Sign in
 
 From the window: **Settings → Sign in**, with a label for the channel (such
-as `main`) and the path to the JSON file.
+as `main`) and the path to the JSON file (absolute, or starting with `~/`).
 
 From a terminal:
 
@@ -83,8 +83,8 @@ mockingbird-studio youtube-disconnect --label main
 ```
 
 `youtube-status` lists each label and whether it's signed in. It never shows
-a token. `youtube-disconnect` revokes the token at Google and deletes it
-from the Keychain. You can also remove the app's access at
+a token. `youtube-disconnect` revokes the token at Google, deletes it from
+the Keychain and takes the label off the list. You can also remove the app's access at
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
 
 ## What Google still limits

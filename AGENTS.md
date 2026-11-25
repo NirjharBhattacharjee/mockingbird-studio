@@ -30,7 +30,8 @@ and say so. Don't implement it quietly.
   post to their YouTube channel, and everything else works without it.
 - Network only for what the user asked for: the feeds they listed, downloads
   they approved, and the YouTube upload they approved (Google's token
-  address and YouTube's API, nothing else). mockingbird itself stays offline.
+  and revoke addresses, `oauth2.googleapis.com/token` and
+  `oauth2.googleapis.com/revoke`, and YouTube's API, nothing else). mockingbird itself stays offline.
 - Nothing is posted without an approval of the upload step in
   `project.toml`. A video goes up private unless the niche says otherwise.
 - The Google token stays in the macOS Keychain. It never goes into a project

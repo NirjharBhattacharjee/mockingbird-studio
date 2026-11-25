@@ -300,7 +300,7 @@ pub const OPS: &[Op] = &[
             req(
                 "client_file",
                 Text,
-                "An absolute path to the JSON file Google gave you for your Desktop app OAuth client (docs/YOUTUBE.md).",
+                "The JSON file Google gave you for your Desktop app OAuth client (docs/YOUTUBE.md): an absolute path, or one starting with ~/.",
             ),
         ],
         run: |a, _| youtube::connect(&a.text("label"), &a.text("client_file")),
@@ -313,7 +313,7 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "youtube_disconnect",
-        help: "Revoke a channel's token at Google and delete it from the Keychain.",
+        help: "Revoke a channel's token at Google, delete it from the Keychain, and take the label out of config.toml.",
         args: &[req("label", Text, "The channel's label.")],
         run: |a, _| youtube::disconnect(&a.text("label")),
     },

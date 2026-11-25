@@ -4,7 +4,8 @@
 //! prints one or writes one to a file.
 //!
 //! Three variables exist for the tests, which touch neither Google nor the
-//! Keychain: `MOCKINGBIRD_STUDIO_GOOGLE` points the endpoints at a server on
+//! Keychain. Only debug builds read them; a release build always uses
+//! Google, `open` and the Keychain: `MOCKINGBIRD_STUDIO_GOOGLE` points the endpoints at a server on
 //! 127.0.0.1, `MOCKINGBIRD_STUDIO_BROWSER` is run with the consent address
 //! instead of `open`, and `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps each item in
 //! a file in that folder instead of the Keychain.
@@ -12,7 +13,8 @@
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -51,10 +53,23 @@ struct Secret {
     refresh_token: String,
 }
 
+/// A variable the tests set. A release build never reads one.
+fn test_var(name: &str) -> Option<String> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(name).ok().filter(|v| !v.is_empty())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = name;
+        None
+    }
+}
+
 /// Google's address, or the test server's on 127.0.0.1.
 fn endpoint(real: &str) -> String {
-    match std::env::var("MOCKINGBIRD_STUDIO_GOOGLE") {
-        Ok(base) if base.starts_with("http://127.0.0.1:") => {
+    match test_var("MOCKINGBIRD_STUDIO_GOOGLE") {
+        Some(base) if base.starts_with("http://127.0.0.1:") => {
             format!("{base}/{}", real.rsplit('/').next().unwrap_or_default())
         }
         _ => real.to_string(),
@@ -74,15 +89,20 @@ fn check_label(label: &str) -> Result<()> {
 }
 
 fn keychain_dir() -> Option<PathBuf> {
-    std::env::var_os("MOCKINGBIRD_STUDIO_KEYCHAIN_DIR")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
+    test_var("MOCKINGBIRD_STUDIO_KEYCHAIN_DIR").map(PathBuf::from)
 }
 
 fn save(label: &str, secret: &Secret) -> Result<()> {
     let bytes = serde_json::to_vec(secret).map_err(|e| e.to_string())?;
     match keychain_dir() {
-        Some(dir) => fs::write(dir.join(label), bytes).map_err(|e| e.to_string()),
+        Some(dir) => fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(dir.join(label))
+            .and_then(|mut f| f.write_all(&bytes))
+            .map_err(|e| e.to_string()),
         None => security_framework::passwords::set_generic_password(SERVICE, label, &bytes)
             .map_err(|e| format!("can't save to the Keychain: {e}")),
     }
@@ -117,9 +137,25 @@ fn delete(label: &str) -> Result<()> {
     }
 }
 
+/// An absolute path, or `~/` and the rest under HOME. Anything else is
+/// refused: an MCP server's working folder is nobody's guess.
+fn client_path(path: &str) -> Result<PathBuf> {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = std::env::var_os("HOME").ok_or("HOME isn't set, so ~/ can't be expanded")?;
+        Ok(PathBuf::from(home).join(rest))
+    } else if Path::new(path).is_absolute() {
+        Ok(PathBuf::from(path))
+    } else {
+        Err(format!(
+            "client_file should be an absolute path or start with ~/, not {path:?}"
+        ))
+    }
+}
+
 /// The client id and secret from the JSON file Google gives for a Desktop
 /// app client. Errors never quote the file.
 fn read_client(path: &str) -> Result<(String, String)> {
+    let path = &client_path(path)?.display().to_string();
     let text = fs::read_to_string(path).map_err(|e| format!("can't read {path}: {e}"))?;
     let v: Value = serde_json::from_str(&text).map_err(|_| format!("{path} is not a JSON file"))?;
     let c = &v["installed"];
@@ -174,7 +210,7 @@ fn post(url: &str, form: &[(&str, &str)]) -> Result<Value> {
 fn open_browser(url: &str) -> Result<()> {
     // The address holds no secret: the PKCE challenge and the state only.
     eprintln!("Opening Google's sign-in page. If no browser opens, go to:\n{url}");
-    let program = std::env::var("MOCKINGBIRD_STUDIO_BROWSER").unwrap_or_else(|_| "open".into());
+    let program = test_var("MOCKINGBIRD_STUDIO_BROWSER").unwrap_or_else(|| "open".into());
     let mut child = Command::new(&program)
         .arg(url)
         .stdin(Stdio::null())
@@ -210,10 +246,26 @@ fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String> {
     }
 }
 
+/// Reads a connection until a deadline: each read gets only the time left,
+/// so a client sending a byte at a time can't hold the wait open.
+struct Deadline<'a>(&'a TcpStream, Instant);
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.1.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        self.0.set_read_timeout(Some(left))?;
+        self.0.read(buf)
+    }
+}
+
 fn answer(mut stream: TcpStream, state: &str) -> Option<Result<String>> {
     stream.set_nonblocking(false).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-    let mut reader = BufReader::new(&stream);
+    // 5 s and 8 KiB for the whole request: a browser's GET is far smaller.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut reader = BufReader::new(Deadline(&stream, deadline).take(8 * 1024));
     let mut first = String::new();
     reader.read_line(&mut first).ok()?;
     // Read the headers too, so closing doesn't reset the connection.
@@ -304,15 +356,16 @@ pub fn connect(label: &str, client_file: &str) -> Result<Value> {
         .as_str()
         .ok_or("Google sent no refresh token")?
         .to_string();
-    save(
-        label,
-        &Secret {
-            client_id,
-            client_secret,
-            refresh_token,
-        },
-    )?;
-    store::update_config(|c| {
+    let secret = Secret {
+        client_id,
+        client_secret,
+        refresh_token,
+    };
+    if let Err(e) = save(label, &secret) {
+        let _ = post(REVOKE, &[("token", &secret.refresh_token)]);
+        return Err(e);
+    }
+    let listed = store::update_config(|c| {
         if !c.channel.iter().any(|ch| ch.label == label) {
             c.channel.push(Channel {
                 label: label.to_string(),
@@ -320,7 +373,14 @@ pub fn connect(label: &str, client_file: &str) -> Result<Value> {
             });
         }
         Ok(())
-    })?;
+    });
+    // A token with no [[channel]] would be signed in but never listed, so
+    // it doesn't stay.
+    if let Err(e) = listed {
+        let _ = post(REVOKE, &[("token", &secret.refresh_token)]);
+        let _ = delete(label);
+        return Err(e);
+    }
     Ok(json!({"label": label, "signed_in": true, "scope": SCOPE}))
 }
 
@@ -332,22 +392,41 @@ pub fn status() -> Result<Value> {
         .channel
         .iter()
         .map(|c| {
-            Ok(json!({
-                "label": c.label,
-                "signed_in": load(&c.label)?.is_some(),
-                "id": c.id,
-                "title": c.title,
-            }))
+            let mut entry = json!({"label": c.label, "id": c.id, "title": c.title});
+            // One unreadable item doesn't hide the other channels.
+            match load(&c.label) {
+                Ok(s) => entry["signed_in"] = s.is_some().into(),
+                Err(e) => {
+                    entry["signed_in"] = false.into();
+                    entry["error"] = e.into();
+                }
+            }
+            entry
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     Ok(json!({"channels": channels}))
 }
 
-/// `youtube_disconnect`: revokes the token at Google and deletes it. It's
-/// deleted even when Google can't be reached; the reply says so.
+/// `youtube_disconnect`: revokes the token at Google, deletes it, and takes
+/// the label out of config.toml. It's deleted even when Google can't be
+/// reached, and the label goes even when the token is already gone; the
+/// reply says which happened.
 pub fn disconnect(label: &str) -> Result<Value> {
     check_label(label)?;
-    let secret = load(label)?.ok_or_else(|| format!("{label} isn't signed in"))?;
+    let secret = load(label)?;
+    let listed = store::update_config(|c| {
+        let before = c.channel.len();
+        c.channel.retain(|ch| ch.label != label);
+        Ok(c.channel.len() != before)
+    })?;
+    let Some(secret) = secret else {
+        return if listed {
+            Ok(json!({"label": label, "signed_in": false, "revoked": false,
+                "note": "There was no token to revoke; the label is removed."}))
+        } else {
+            Err(format!("{label} isn't signed in"))
+        };
+    };
     let revoked = post(REVOKE, &[("token", &secret.refresh_token)]);
     delete(label)?;
     let mut out = json!({"label": label, "signed_in": false, "revoked": revoked.is_ok()});
@@ -384,6 +463,19 @@ mod tests {
         .unwrap();
         let e = read_client(path.to_str().unwrap()).unwrap_err();
         assert!(e.contains("Desktop app") && !e.contains("hush"), "{e}");
+    }
+
+    #[test]
+    fn a_client_path_is_absolute_or_under_home() {
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(
+            client_path("~/Downloads/c.json").unwrap(),
+            Path::new(&home).join("Downloads/c.json")
+        );
+        assert_eq!(client_path("/a/c.json").unwrap(), Path::new("/a/c.json"));
+        for bad in ["c.json", "./c.json", "~other/c.json"] {
+            assert!(client_path(bad).is_err(), "{bad:?}");
+        }
     }
 
     /// Writes, reads and deletes a real Keychain item.

@@ -603,7 +603,7 @@ async function refreshChannels() {
     $("channels").replaceChildren(...channels.map((c) =>
       el("li", `${c.label}: ${c.signed_in ? "signed in" : "not signed in"}${c.title ? ` (${c.title})` : ""}`)));
   } catch (e) {
-    $("settings-error").textContent = String(e);
+    $("youtube-error").textContent = String(e);
   }
 }
 
@@ -611,12 +611,12 @@ $("signin-form").onsubmit = async (e) => {
   e.preventDefault();
   const button = e.target.querySelector("button");
   button.disabled = true;
-  button.textContent = "Waiting for the browser…";
-  $("settings-error").textContent = "";
+  button.textContent = "Waiting up to 5 minutes for the browser…";
+  $("youtube-error").textContent = "";
   try {
     await op("youtube_connect", { label: $("signin-label").value, client_file: $("signin-file").value });
   } catch (err) {
-    $("settings-error").textContent = String(err);
+    $("youtube-error").textContent = String(err);
   }
   button.disabled = false;
   button.textContent = "Sign in";

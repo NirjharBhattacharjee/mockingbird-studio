@@ -8,6 +8,7 @@ mod common;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -214,7 +215,14 @@ fn a_sign_in_runs_end_to_end_and_no_reply_file_or_log_holds_the_token() {
     );
     assert_eq!(r["signed_in"], true);
     assert!(google.lock().unwrap().exchanged);
-    let item = std::fs::read_to_string(keychain.path().join("main")).unwrap();
+    let item_path = keychain.path().join("main");
+    let mode = std::fs::metadata(&item_path).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o777,
+        0o600,
+        "only the owner can read the stand-in item"
+    );
+    let item = std::fs::read_to_string(&item_path).unwrap();
     assert!(
         item.contains(REFRESH),
         "the refresh token is in the Keychain"
@@ -237,7 +245,7 @@ fn a_sign_in_runs_end_to_end_and_no_reply_file_or_log_holds_the_token() {
     assert_eq!(google.lock().unwrap().revoked, vec![REFRESH.to_string()]);
     assert!(!keychain.path().join("main").exists());
     let r = run(&mut seen, &["youtube-status"]);
-    assert_eq!(r["channels"][0]["signed_in"], false);
+    assert_eq!(r["channels"], json!([]), "the label is gone too");
 
     let mut all = Vec::new();
     files(home.path(), &mut all);
@@ -296,4 +304,40 @@ fn a_refused_consent_is_an_error_and_keeps_nothing() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("access_denied"));
     assert_eq!(std::fs::read_dir(keychain.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn disconnect_removes_a_label_whose_token_is_already_gone() {
+    let home = tempfile::tempdir().unwrap();
+    let keychain = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "projects = []\n\n[[channel]]\nlabel = \"gone\"\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .args(args)
+            .arg("--json")
+            .env("MOCKINGBIRD_STUDIO_HOME", home.path())
+            .env("MOCKINGBIRD_STUDIO_KEYCHAIN_DIR", keychain.path())
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+    let (ok, out, err) = run(&["youtube-disconnect", "--label", "gone"]);
+    assert!(ok, "{err}");
+    let r: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(r["revoked"], false);
+    let (_, out, _) = run(&["youtube-status"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&out).unwrap()["channels"],
+        json!([])
+    );
+    let (ok, _, err) = run(&["youtube-disconnect", "--label", "gone"]);
+    assert!(!ok && err.contains("isn't signed in"), "{err}");
 }

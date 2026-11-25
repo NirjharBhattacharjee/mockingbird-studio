@@ -629,7 +629,8 @@ looks in a feed.
 - `youtube_status` lists the labels, whether each has a token, and the
   channel's name once an upload has told the app what it is. The upload
   scope can't ask Google for the name beforehand.
-- `youtube_disconnect(label)` revokes the token at Google and deletes it.
+- `youtube_disconnect(label)` revokes the token at Google, deletes it, and
+  takes the label out of `config.toml`.
 - No operation returns a token. It isn't written to `config.toml`,
   `project.toml`, a job file or a log. An access token lives only in the
   memory of the job that's using it.
@@ -763,7 +764,8 @@ feeds = ["https://example.com/feed.xml"]
   variables make that possible: `MOCKINGBIRD_STUDIO_GOOGLE` points the consent,
   token and revoke endpoints at it (an address on 127.0.0.1 only),
   `MOCKINGBIRD_STUDIO_BROWSER` replaces `open`, and
-  `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps Keychain items in a folder.
+  `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps Keychain items in a folder. Only
+  debug builds read them.
 - The window holds almost no logic. Its evidence is screenshots in the PR.
 
 ## Code layout
