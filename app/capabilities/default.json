@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window. Commands are added as they're built.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
