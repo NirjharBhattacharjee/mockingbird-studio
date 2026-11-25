@@ -39,6 +39,25 @@ fn cli(home: &Path, args: &[&str]) -> Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
+/// A 2 s 1280×960 MPEG-4 Part 2 video with MP2 audio, in Matroska.
+fn make_clip(dir: &Path) {
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=1280x960:rate=25:duration=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=duration=2",
+        "-c:v",
+        "mpeg4",
+        "-c:a",
+        "mp2",
+        dir.join("research/clip.mkv").to_str().unwrap(),
+    ]);
+}
+
 #[test]
 #[ignore = "needs ffmpeg"]
 fn submit_records_lengths_and_queues_a_preview_copy() {
@@ -57,37 +76,60 @@ fn submit_records_lengths_and_queues_a_preview_copy() {
         "sine=duration=1.5",
         dir.join("research/voice.wav").to_str().unwrap(),
     ]);
-    ffmpeg(&[
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc=size=1280x960:rate=25:duration=2",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=duration=2",
-        "-c:v",
-        "mpeg4",
-        "-c:a",
-        "mp2",
-        dir.join("research/clip.mkv").to_str().unwrap(),
-    ]);
+    make_clip(&dir);
+
+    // A relative path in config.toml is passed over, and the reply says so.
+    let config = home.join("config.toml");
+    let mut text = fs::read_to_string(&config).unwrap();
+    text.push_str("ffprobe = \"ffprobe\"\n");
+    fs::write(&config, text).unwrap();
+
+    let submit = || {
+        cli(
+            &home,
+            &[
+                "submit",
+                "--project",
+                p,
+                "--step",
+                "research",
+                "--files",
+                "research/voice.wav",
+                "research/clip.mkv",
+            ],
+        )
+    };
+    // The step has a gate: approve the last round to send a new one.
+    let resubmit = || {
+        cli(&home, &["approve", "--project", p, "--step", "research"]);
+        submit()
+    };
+    let wait = |id: &str| {
+        let end = Instant::now() + Duration::from_secs(60);
+        loop {
+            let j = cli(&home, &["job", "--id", id]);
+            if !matches!(j["state"].as_str(), Some("queued" | "running")) {
+                break j;
+            }
+            assert!(Instant::now() < end, "proxy job still {}", j["state"]);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let proxy_jobs = || {
+        let all = cli(&home, &["jobs", "--project", p]);
+        all["jobs"].as_array().unwrap().len()
+    };
 
     let began = Instant::now();
-    let step = cli(
-        &home,
-        &[
-            "submit",
-            "--project",
-            p,
-            "--step",
-            "research",
-            "--files",
-            "research/voice.wav",
-            "research/clip.mkv",
-        ],
-    );
+    let step = submit();
     eprintln!("submit with ffprobe took {:?}", began.elapsed());
+    assert!(
+        step["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("ffprobe = \"ffprobe\""),
+        "{step}"
+    );
     let outs = &step["output"];
     assert_eq!(outs[0]["duration"], 1.5, "{step}");
     assert!(outs[0].get("proxy").is_none(), "{step}");
@@ -105,19 +147,28 @@ fn submit_records_lengths_and_queues_a_preview_copy() {
     let jobs = step["proxy_jobs"].as_array().unwrap();
     assert_eq!(jobs.len(), 1, "{step}");
     assert_eq!(jobs[0]["kind"], "proxy");
-    let id = jobs[0]["id"].as_str().unwrap();
-    let end = Instant::now() + Duration::from_secs(60);
-    let job = loop {
-        let j = cli(&home, &["job", "--id", id]);
-        if !matches!(j["state"].as_str(), Some("queued" | "running")) {
-            break j;
-        }
-        assert!(Instant::now() < end, "proxy job still {}", j["state"]);
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let id = jobs[0]["id"].as_str().unwrap().to_string();
+    // Submitted again at once: the job on its way, or the finished copy,
+    // stands. Either way there's still one job.
+    resubmit();
+    assert_eq!(proxy_jobs(), 1);
+    let job = wait(&id);
     assert_eq!(job["state"], "done", "{job}");
     assert_eq!(job["outputs"], serde_json::json!([proxy]));
     eprintln!("proxy job took {:?} after submit", began.elapsed());
+
+    // The copy is newer than the original: nothing to do.
+    let again = resubmit();
+    assert_eq!(again["proxy_jobs"][0]["proxy"], "up to date", "{again}");
+    assert_eq!(again["output"][1]["proxy"], proxy, "{again}");
+    assert_eq!(proxy_jobs(), 1);
+
+    // A new render at the same path gets a new copy.
+    make_clip(&dir);
+    let redone = resubmit();
+    let id = redone["proxy_jobs"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(wait(&id)["state"], "done", "{redone}");
+    assert_eq!(proxy_jobs(), 2);
 
     // H.264 and AAC, the short side down to 720.
     let probe = Command::new(tool("ffprobe"))
