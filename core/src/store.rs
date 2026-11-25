@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::project::{Project, Result};
+use crate::project::{Project, Result, SCHEMA};
 
 pub const PROJECT_FILE: &str = "project.toml";
 
@@ -74,7 +74,12 @@ fn write<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let mut file = File::create(&tmp).map_err(io)?;
     file.write_all(text.as_bytes()).map_err(io)?;
     file.sync_all().map_err(io)?;
-    fs::rename(&tmp, path).map_err(io)
+    fs::rename(&tmp, path).map_err(io)?;
+    // Sync the folder too, so the rename itself survives a crash.
+    let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+    File::open(parent.unwrap_or(Path::new(".")))
+        .and_then(|d| d.sync_all())
+        .map_err(io)
 }
 
 /// Writes a new project file. Refused if one is already there.
@@ -94,6 +99,13 @@ pub fn update_project<R>(dir: &Path, f: impl FnOnce(&mut Project) -> Result<R>) 
     let path = dir.join(PROJECT_FILE);
     locked(&path, || {
         let mut project: Project = read(&path)?;
+        if project.schema != SCHEMA {
+            return Err(format!(
+                "{} has schema {}; this version only changes schema {SCHEMA}",
+                path.display(),
+                project.schema
+            ));
+        }
         let r = f(&mut project)?;
         write(&path, &project)?;
         Ok(r)
@@ -130,6 +142,48 @@ mod tests {
             back.rest["tool"]["voice"]["command"][0].as_str(),
             Some("tts")
         );
+    }
+
+    #[test]
+    fn an_update_keeps_keys_and_rows_it_does_not_know() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project::new("T", None, "explainer", jiff::Timestamp::now()).unwrap();
+        create_project(dir.path(), &p).unwrap();
+        let path = dir.path().join(PROJECT_FILE);
+        let mut text = fs::read_to_string(&path).unwrap();
+        text = text.replacen("next_note = 1\n", "next_note = 1\ncolour = \"red\"\n", 1);
+        text = text.replacen("round = 0\n", "round = 0\nlocked = true\n", 1);
+        text.push_str(
+            "\n[[post]]\nstep = \"upload\"\nvideo = \"VIDEO_ID\"\nat = 2026-11-25T18:30:00Z\n",
+        );
+        fs::write(&path, text).unwrap();
+
+        update_project(dir.path(), |p| {
+            p.note_add("research", "n", None, None, jiff::Timestamp::now())?;
+            Ok(())
+        })
+        .unwrap();
+
+        let back: Project = read(&path).unwrap();
+        assert_eq!(back.notes.len(), 1);
+        assert_eq!(back.rest["colour"].as_str(), Some("red"));
+        assert_eq!(back.steps[0].rest["locked"].as_bool(), Some(true));
+        let post = &back.rest["post"][0];
+        assert_eq!(post["video"].as_str(), Some("VIDEO_ID"));
+        assert_eq!(
+            post["at"].as_datetime().unwrap().to_string(),
+            "2026-11-25T18:30:00Z"
+        );
+    }
+
+    #[test]
+    fn a_newer_schema_is_not_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut p = Project::new("T", None, "explainer", jiff::Timestamp::now()).unwrap();
+        p.schema = 2;
+        create_project(dir.path(), &p).unwrap();
+        let err = update_project(dir.path(), |_| Ok(())).unwrap_err();
+        assert!(err.contains("schema 2"), "{err}");
     }
 
     #[test]

@@ -24,6 +24,9 @@ pub struct Project {
     pub decisions: Vec<Decision>,
     #[serde(default, rename = "note")]
     pub notes: Vec<Note>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -40,6 +43,9 @@ pub struct Step {
     /// The current round's files.
     #[serde(default, rename = "output")]
     pub outputs: Vec<Output>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +63,9 @@ pub struct Output {
     /// Relative to the project folder.
     pub path: String,
     pub kind: Kind,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +121,9 @@ pub struct Decision {
     pub via: Via,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -130,6 +142,9 @@ pub struct Note {
     pub state: NoteState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply: Option<String>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +188,9 @@ pub const EXPLAINER: &[(&str, bool, &[&str])] = &[
 
 impl Project {
     pub fn new(title: &str, niche: Option<String>, workflow: &str, now: Timestamp) -> Result<Self> {
+        if title.trim().is_empty() {
+            return Err("a project needs a title".into());
+        }
         // ponytail: one built-in workflow; templates from files come in M5.
         if workflow != "explainer" {
             return Err(format!(
@@ -189,6 +207,7 @@ impl Project {
                 round: 0,
                 summary: None,
                 outputs: vec![],
+                rest: Default::default(),
             })
             .collect();
         Ok(Project {
@@ -201,6 +220,7 @@ impl Project {
             steps,
             decisions: vec![],
             notes: vec![],
+            rest: Default::default(),
         })
     }
 
@@ -225,6 +245,8 @@ impl Project {
         id: &str,
         outputs: Vec<Output>,
         summary: Option<String>,
+        via: Via,
+        now: Timestamp,
     ) -> Result<()> {
         let step = self.step(id)?;
         if !matches!(step.state, State::Todo | State::Redo | State::Approved) {
@@ -250,6 +272,7 @@ impl Project {
                 waiting.join(", ")
             ));
         }
+        let was_approved = step.state == State::Approved;
         let step = self.step_mut(id)?;
         step.round += 1;
         step.outputs = outputs;
@@ -259,6 +282,9 @@ impl Project {
         } else {
             State::Done
         };
+        if was_approved {
+            self.cascade(id, "was submitted again", via, now);
+        }
         Ok(())
     }
 
@@ -296,7 +322,39 @@ impl Project {
         step.state = State::Redo;
         let round = step.round;
         self.decide(id, round, Verdict::Redo, Some(note.to_string()), via, now);
+        self.cascade(id, "was sent back for a redo", via, now);
         Ok(())
+    }
+
+    /// Sends every step that comes after `id`, directly or through other
+    /// steps, and is past todo back to redo, with a decision saying why.
+    fn cascade(&mut self, id: &str, why: &str, via: Via, now: Timestamp) {
+        let mut later = vec![id.to_string()];
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for s in &self.steps {
+                if !later.contains(&s.id) && s.after.iter().any(|a| later.contains(a)) {
+                    later.push(s.id.clone());
+                    grew = true;
+                }
+            }
+        }
+        let note = format!("{id} {why}, and this step comes after it");
+        for s in self.steps.iter_mut() {
+            if later[1..].contains(&s.id) && !matches!(s.state, State::Todo | State::Redo) {
+                s.state = State::Redo;
+                self.decisions.push(Decision {
+                    step: s.id.clone(),
+                    round: s.round,
+                    decision: Verdict::Redo,
+                    at: now,
+                    via,
+                    note: Some(note.clone()),
+                    rest: Default::default(),
+                });
+            }
+        }
     }
 
     fn decide(
@@ -315,6 +373,7 @@ impl Project {
             at,
             via,
             note,
+            rest: Default::default(),
         });
     }
 
@@ -348,6 +407,7 @@ impl Project {
             round,
             state: NoteState::Open,
             reply: None,
+            rest: Default::default(),
         });
         Ok(self.notes.last().unwrap())
     }
@@ -383,6 +443,7 @@ mod tests {
         vec![Output {
             path: "x/x.md".into(),
             kind: Kind::Text,
+            rest: Default::default(),
         }]
     }
 
@@ -394,7 +455,7 @@ mod tests {
     /// can be submitted.
     fn project() -> Project {
         let mut p = Project::new("T", None, "explainer", now()).unwrap();
-        p.submit("research", out(), None).unwrap();
+        p.submit("research", out(), None, Via::Cli, now()).unwrap();
         p.approve("research", None, Via::Cli, now()).unwrap();
         p
     }
@@ -406,12 +467,13 @@ mod tests {
         assert!(p.steps.iter().all(|s| s.state == Todo && s.round == 0));
         assert!(p.step("thumbnail").is_ok() && p.step("description").is_ok());
         assert!(Project::new("T", None, "nope", now()).is_err());
+        assert!(Project::new(" ", None, "explainer", now()).is_err());
     }
 
     #[test]
     fn todo_to_review_on_submit_with_a_gate() {
         let mut p = project();
-        p.submit("script", out(), Some("first draft".into()))
+        p.submit("script", out(), Some("first draft".into()), Via::Cli, now())
             .unwrap();
         let s = p.step("script").unwrap();
         assert_eq!((s.state, s.round), (Review, 1));
@@ -421,9 +483,9 @@ mod tests {
     #[test]
     fn todo_to_done_on_submit_without_a_gate() {
         let mut p = project();
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         p.approve("script", None, Via::Cli, now()).unwrap();
-        p.submit("assets", out(), None).unwrap();
+        p.submit("assets", out(), None, Via::Cli, now()).unwrap();
         assert_eq!(state(&p, "assets"), Done);
     }
 
@@ -441,7 +503,7 @@ mod tests {
     #[test]
     fn review_to_redo_needs_a_note() {
         let mut p = project();
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         assert!(p.redo("script", "  ", Via::Mcp, now()).is_err());
         p.redo("script", "slow open", Via::Mcp, now()).unwrap();
         assert_eq!(state(&p, "script"), Redo);
@@ -463,9 +525,9 @@ mod tests {
     #[test]
     fn done_to_redo() {
         let mut p = project();
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         p.approve("script", None, Via::Cli, now()).unwrap();
-        p.submit("assets", out(), None).unwrap();
+        p.submit("assets", out(), None, Via::Cli, now()).unwrap();
         p.redo("assets", "missing logo", Via::Cli, now()).unwrap();
         assert_eq!(state(&p, "assets"), Redo);
     }
@@ -473,9 +535,9 @@ mod tests {
     #[test]
     fn redo_to_review_on_submit_with_a_gate() {
         let mut p = project();
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         p.redo("script", "again", Via::Cli, now()).unwrap();
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         let s = p.step("script").unwrap();
         assert_eq!((s.state, s.round), (Review, 2));
     }
@@ -483,11 +545,11 @@ mod tests {
     #[test]
     fn redo_to_done_on_submit_without_a_gate() {
         let mut p = project();
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         p.approve("script", None, Via::Cli, now()).unwrap();
-        p.submit("assets", out(), None).unwrap();
+        p.submit("assets", out(), None, Via::Cli, now()).unwrap();
         p.redo("assets", "again", Via::Cli, now()).unwrap();
-        p.submit("assets", out(), None).unwrap();
+        p.submit("assets", out(), None, Via::Cli, now()).unwrap();
         let s = p.step("assets").unwrap();
         assert_eq!((s.state, s.round), (Done, 2));
     }
@@ -495,21 +557,76 @@ mod tests {
     #[test]
     fn approved_to_review_on_submit_again() {
         let mut p = project();
-        p.submit("research", out(), None).unwrap();
+        p.submit("research", out(), None, Via::Cli, now()).unwrap();
         let s = p.step("research").unwrap();
         assert_eq!((s.state, s.round), (Review, 2));
     }
 
     #[test]
+    fn a_redo_sends_every_later_step_past_todo_back_to_redo() {
+        let mut p = project();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
+        p.approve("script", None, Via::Cli, now()).unwrap();
+        p.submit("assets", out(), None, Via::Cli, now()).unwrap(); // done
+        p.submit("voice", out(), None, Via::Cli, now()).unwrap(); // review
+        let before = p.decisions.len();
+        p.redo("research", "wrong topic", Via::Window, now())
+            .unwrap();
+        for id in ["research", "script", "assets", "voice"] {
+            assert_eq!(state(&p, id), Redo, "{id}");
+        }
+        assert_eq!(state(&p, "look"), Todo);
+        // research's own decision, then one for each later step.
+        assert_eq!(p.decisions.len(), before + 4);
+        let d = p.last_decision("voice").unwrap();
+        assert_eq!(
+            (d.decision, d.via, d.round),
+            (Verdict::Redo, Via::Window, 1)
+        );
+        assert!(
+            d.note
+                .as_deref()
+                .unwrap()
+                .contains("research was sent back")
+        );
+    }
+
+    #[test]
+    fn resubmitting_an_approved_step_sends_later_steps_back_to_redo() {
+        let mut p = project();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
+        p.submit("research", out(), None, Via::Mcp, now()).unwrap();
+        assert_eq!(state(&p, "research"), Review);
+        assert_eq!(state(&p, "script"), Redo);
+        let d = p.last_decision("script").unwrap();
+        assert_eq!(d.via, Via::Mcp);
+        assert!(
+            d.note
+                .as_deref()
+                .unwrap()
+                .contains("research was submitted again")
+        );
+        // A step submitted from redo sends nothing back.
+        let n = p.decisions.len();
+        p.approve("research", None, Via::Cli, now()).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
+        assert_eq!(p.decisions.len(), n + 1);
+    }
+
+    #[test]
     fn submit_past_an_open_gate_is_refused() {
         let mut p = Project::new("T", None, "explainer", now()).unwrap();
-        p.submit("research", out(), None).unwrap();
+        p.submit("research", out(), None, Via::Cli, now()).unwrap();
         // research is in review, not approved, so script waits.
-        let err = p.submit("script", out(), None).unwrap_err();
+        let err = p
+            .submit("script", out(), None, Via::Cli, now())
+            .unwrap_err();
         assert!(err.contains("waits for research"), "{err}");
         assert_eq!(state(&p, "script"), Todo);
         // upload waits for three steps.
-        let err = p.submit("upload", out(), None).unwrap_err();
+        let err = p
+            .submit("upload", out(), None, Via::Cli, now())
+            .unwrap_err();
         assert!(err.contains("film, thumbnail, description"), "{err}");
     }
 
@@ -519,17 +636,17 @@ mod tests {
         assert!(p.approve("script", None, Via::Cli, now()).is_err()); // todo
         assert!(p.redo("script", "x", Via::Cli, now()).is_err()); // todo
         assert!(p.approve("research", None, Via::Cli, now()).is_err()); // approved
-        p.submit("script", out(), None).unwrap();
-        assert!(p.submit("script", out(), None).is_err()); // review
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
+        assert!(p.submit("script", out(), None, Via::Cli, now()).is_err()); // review
         p.redo("script", "x", Via::Cli, now()).unwrap();
         assert!(p.approve("script", None, Via::Cli, now()).is_err()); // redo
         assert!(p.redo("script", "x", Via::Cli, now()).is_err()); // redo
-        p.submit("script", out(), None).unwrap();
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
         p.approve("script", None, Via::Cli, now()).unwrap();
-        p.submit("assets", out(), None).unwrap();
-        assert!(p.submit("assets", out(), None).is_err()); // done
+        p.submit("assets", out(), None, Via::Cli, now()).unwrap();
+        assert!(p.submit("assets", out(), None, Via::Cli, now()).is_err()); // done
         assert!(p.approve("assets", None, Via::Cli, now()).is_err()); // done
-        assert!(p.submit("nope", out(), None).is_err());
+        assert!(p.submit("nope", out(), None, Via::Cli, now()).is_err());
     }
 
     #[test]

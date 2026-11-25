@@ -190,11 +190,13 @@ pub fn dispatch(name: &str, args: &Value, via: Via) -> Result<Value> {
             return Err(format!("{name}: {key} should be {:?}", arg.kind));
         }
     }
-    if let Some(a) = op
-        .args
-        .iter()
-        .find(|a| a.required && map.get(a.name).is_none_or(Value::is_null))
-    {
+    if let Some(a) = op.args.iter().find(|a| {
+        let v = map.get(a.name);
+        a.required
+            && (v.is_none_or(Value::is_null)
+                || v.and_then(Value::as_str)
+                    .is_some_and(|s| s.trim().is_empty()))
+    }) {
         return Err(format!("{name} needs {}", a.name));
     }
     (op.run)(&Args(map), via)
@@ -228,29 +230,35 @@ impl Args<'_> {
 }
 
 /// A folder path, or a folder name when exactly one listed project has it.
+/// A name without a `/` is looked up in the list first.
 fn project_dir(arg: &str) -> Result<PathBuf> {
+    if !arg.contains('/') {
+        let config = store::read_config()?;
+        let hits: Vec<&PathBuf> = config
+            .projects
+            .iter()
+            .filter(|d| d.file_name().is_some_and(|n| n == arg))
+            .collect();
+        match hits.as_slice() {
+            [one] => return Ok(one.to_path_buf()),
+            [] => {}
+            many => {
+                return Err(format!(
+                    "{} projects are named {arg:?}; pass the path: {}",
+                    many.len(),
+                    many.iter()
+                        .map(|d| d.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+    }
     let path = Path::new(arg);
     if path.join(PROJECT_FILE).is_file() {
         return canonical(path);
     }
-    let config = store::read_config()?;
-    let hits: Vec<&PathBuf> = config
-        .projects
-        .iter()
-        .filter(|d| d.file_name().is_some_and(|n| n == arg))
-        .collect();
-    match hits.as_slice() {
-        [one] => Ok(one.to_path_buf()),
-        [] => Err(format!("no project at or named {arg:?}")),
-        many => Err(format!(
-            "{} projects are named {arg:?}; pass the path: {}",
-            many.len(),
-            many.iter()
-                .map(|d| d.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    Err(format!("no project at or named {arg:?}"))
 }
 
 fn canonical(path: &Path) -> Result<PathBuf> {
@@ -338,7 +346,7 @@ fn status_of(dir: &Path) -> Result<Value> {
         .iter()
         .map(|s| {
             let mut v = json!(s);
-            v["last_decision"] = json!(p.last_decision(&s.id));
+            v["last_decision"] = json!(p.last_decision(&s.id).filter(|d| d.round == s.round));
             v
         })
         .collect();
@@ -358,7 +366,7 @@ fn status_of(dir: &Path) -> Result<Value> {
     }))
 }
 
-fn submit(a: &Args, _: Via) -> Result<Value> {
+fn submit(a: &Args, via: Via) -> Result<Value> {
     let dir = a.project()?;
     let files = a.list("files");
     if files.is_empty() {
@@ -370,12 +378,13 @@ fn submit(a: &Args, _: Via) -> Result<Value> {
             inside(&dir, f).map(|path| Output {
                 kind: Kind::of(&path),
                 path,
+                rest: Default::default(),
             })
         })
         .collect::<Result<Vec<_>>>()?;
     let step = a.text("step");
     store::update_project(&dir, |p| {
-        p.submit(&step, outputs, a.opt("summary"))?;
+        p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
         Ok(json!(p.step(&step)?))
     })
 }
@@ -397,7 +406,10 @@ fn notes(a: &Args, _: Via) -> Result<Value> {
         .iter()
         .filter(|s| s.state == State::Redo && wanted(&s.id))
         .map(|s| {
-            let note = p.last_decision(&s.id).and_then(|d| d.note.clone());
+            let note = p
+                .last_decision(&s.id)
+                .filter(|d| d.round == s.round)
+                .and_then(|d| d.note.clone());
             json!({"step": s.id, "round": s.round, "note": note})
         })
         .collect();
@@ -511,6 +523,9 @@ mod tests {
                 .contains("id should be")
         );
         assert!(run("nope", Value::Null).is_err());
+        let err = run("status", json!({"project": ""})).unwrap_err();
+        assert!(err.contains("needs project"), "{err}");
+        assert!(run("project_new", json!({"dir": "x", "title": " "})).is_err());
     }
 
     #[test]
@@ -644,6 +659,9 @@ mod tests {
             p(json!({"step": "research", "files": ["research/topic.md"]})),
         )
         .unwrap();
+        // The redo was on round 1, so round 2 shows no decision yet.
+        let status = run("status", p(json!({}))).unwrap();
+        assert_eq!(status["steps"][0]["last_decision"], Value::Null);
         run("note_done", p(json!({"id": 1, "reply": "done"}))).unwrap();
         run("note_done", p(json!({"id": 2}))).unwrap();
         let d = dispatch("approve", &p(json!({"step": "research"})), Via::Mcp).unwrap();
