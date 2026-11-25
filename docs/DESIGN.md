@@ -391,8 +391,11 @@ Later: `job_start`, `jobs`, `job`, `job_cancel` (M2); `niches`, `niche_add`,
 
 `mockingbird-studio <operation> [--flags] [--json]`, with dashes for
 underscores: `mockingbird-studio note-add --project … --step script --text …`.
-With no arguments the binary opens the window. `mcp` and, from M2, `runner`
-are the two commands that aren't operations.
+With no arguments the binary opens the window. `mcp`, `runner` and `setup`
+are the commands that aren't operations. `setup [--yes] [--config <file>]`
+adds the `mcp` entry to Claude Desktop's config after asking; `--yes` skips
+the question, except when the binary's path won't last (under `target/`, or a
+translocated app).
 
 ### MCP server
 

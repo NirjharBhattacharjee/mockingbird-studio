@@ -17,6 +17,9 @@ fn command_name(op: &str) -> &'static str {
 fn build() -> Command {
     let mut cli = Command::new("mockingbird-studio")
         .about("Run the studio's operations from a terminal. With no command, open the window.")
+        .after_help(
+            "Not operations:\n  mcp     Serve MCP over stdio, for Claude Desktop.\n  setup   Add that server to Claude Desktop's config, after you say yes.\n  runner  Run queued jobs (started by the app).",
+        )
         .subcommand_required(true);
     for op in OPS {
         let mut cmd = Command::new(command_name(op.name)).about(op.help).arg(
