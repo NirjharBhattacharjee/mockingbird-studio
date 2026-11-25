@@ -2024,7 +2024,6 @@ dependencies = [
 name = "mockingbird-studio"
 version = "0.1.0"
 dependencies = [
- "serde_json",
  "studio-core",
  "tauri",
  "tauri-build",
@@ -3237,7 +3236,7 @@ name = "studio-core"
 version = "0.1.0"
 dependencies = [
  "clap",
- "jiff 0.2.46",
+ "jiff 1.0.3",
  "rmcp",
  "serde",
  "serde_json",

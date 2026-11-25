@@ -3,7 +3,7 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_mockingbird-studio");
 
 #[test]
-fn mcp_exits_without_a_window() {
+fn mcp_exits_with_empty_stdout() {
     let out = Command::new(BIN).arg("mcp").output().unwrap();
     assert!(out.status.success());
     assert!(
