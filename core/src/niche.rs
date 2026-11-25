@@ -97,7 +97,7 @@ fn workflow(v: &str) -> Result<Option<String>> {
 }
 
 /// An http or https address with a host. The scheme is lower-cased.
-fn feed(url: &str) -> Result<String> {
+pub(crate) fn feed(url: &str) -> Result<String> {
     let url = url.trim();
     let bad = || format!("{url:?} isn't an http or https address with a host");
     let (scheme, rest) = url.split_once("://").ok_or_else(bad)?;
@@ -116,7 +116,7 @@ fn feed(url: &str) -> Result<String> {
 
 /// The index of the niche `key` names: its id, else its name in any case.
 /// A name that fits more than one niche is refused.
-fn find(niches: &[Niche], key: &str) -> Result<usize> {
+pub(crate) fn find(niches: &[Niche], key: &str) -> Result<usize> {
     let k = key.trim();
     let mut hits: Vec<usize> = (0..niches.len()).filter(|&i| niches[i].id == k).collect();
     if hits.is_empty() {

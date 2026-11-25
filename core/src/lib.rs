@@ -9,6 +9,7 @@ pub mod ops;
 pub mod project;
 pub mod proxy;
 pub mod rounds;
+pub mod scan;
 pub mod setup;
 pub mod sheet;
 pub mod store;

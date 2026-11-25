@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example blog</title>
+  <id>urn:example:blog</id>
+  <updated>2026-11-26T06:00:00Z</updated>
+  <entry>
+    <title>Newest post</title>
+    <id>urn:example:3</id>
+    <link rel="alternate" href="https://blog.example/newest"/>
+    <published>2026-11-26T06:00:00Z</published>
+    <updated>2026-11-26T06:00:00Z</updated>
+  </entry>
+  <entry>
+    <title>Only updated</title>
+    <id>urn:example:2</id>
+    <link href="https://blog.example/updated-only"/>
+    <updated>2026-11-25T12:00:00Z</updated>
+  </entry>
+  <entry>
+    <title>Same story as the RSS feed</title>
+    <id>urn:example:4</id>
+    <link href="https://news.example/fresh"/>
+    <published>2026-11-25T09:30:00Z</published>
+  </entry>
+  <entry>
+    <title>Last month</title>
+    <id>urn:example:1</id>
+    <link href="https://blog.example/last-month"/>
+    <published>2026-10-26T06:00:00Z</published>
+  </entry>
+</feed>

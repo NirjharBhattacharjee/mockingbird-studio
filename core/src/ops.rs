@@ -12,6 +12,7 @@ use crate::jobs;
 use crate::niche;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
 use crate::rounds;
+use crate::scan;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
 use crate::youtube;
@@ -250,7 +251,7 @@ pub const OPS: &[Op] = &[
             opt(
                 "feeds",
                 TextList,
-                "Feed addresses, http or https. Stored now, fetched by the scan later.",
+                "Feed addresses, http or https. The scan fetches them.",
             ),
             opt("workflow", Text, "The default workflow for its projects."),
             opt("visibility", Text, NICHE_VISIBILITY),
@@ -316,6 +317,33 @@ pub const OPS: &[Op] = &[
         help: "Revoke a channel's token at Google, delete it from the Keychain, and take the label out of config.toml.",
         args: &[req("label", Text, "The channel's label.")],
         run: |a, _| youtube::disconnect(&a.text("label")),
+    },
+    Op {
+        name: "scan",
+        help: "Fetch the feeds of one niche, or of every niche, and write today's scan: the entries from the last window_hours that earlier scans haven't listed. Fetches the feed addresses only, never the pages they link to.",
+        args: &[opt(
+            "niche",
+            Text,
+            "The niche's id, or its name. Every niche if left out.",
+        )],
+        run: |a, _| scan::scan(a),
+    },
+    Op {
+        name: "topics",
+        help: "The latest scan of one niche, or of every niche: its items and its shortlist.",
+        args: &[
+            opt(
+                "niche",
+                Text,
+                "The niche's id, or its name. Every niche if left out.",
+            ),
+            opt(
+                "day",
+                Text,
+                "A day, such as 2026-11-26. The latest if left out.",
+            ),
+        ],
+        run: |a, _| scan::topics(a),
     },
 ];
 
@@ -806,10 +834,35 @@ mod tests {
                 "feed_remove",
                 "youtube_connect",
                 "youtube_status",
-                "youtube_disconnect"
+                "youtube_disconnect",
+                "scan",
+                "topics"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
+    }
+
+    #[test]
+    fn scan_and_topics_say_what_is_missing_without_fetching() {
+        let _t = setup();
+        run("niche_add", json!({"name": "Scan test"})).unwrap();
+        let e = run("scan", json!({"niche": "scan-test"})).unwrap_err();
+        assert!(e.contains("has no feeds"), "{e}");
+        let e = run("topics", json!({"niche": "scan-test"})).unwrap_err();
+        assert!(e.contains("no scan of scan-test yet"), "{e}");
+        let e = run("topics", json!({"day": "yesterday"})).unwrap_err();
+        assert!(e.contains("day should look like"), "{e}");
+        assert!(run("scan", json!({"niche": "nope"})).is_err());
+        // Asked for every niche, a niche with no feeds is reported, not fatal.
+        let r = run("scan", json!({})).unwrap();
+        assert!(
+            r["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["niche"] == "scan-test")
+        );
+        assert!(run("topics", json!({"niche": "scan-test", "day": "2020-01-01"})).is_err());
     }
 
     #[test]
