@@ -139,6 +139,7 @@ function drawPreview(out, round) {
   previewKey = key;
   const box = $("preview");
   box.replaceChildren();
+  box.classList.remove("thumb");
   if (!out) return;
   // status.project is the canonical folder, which is what the scope allows.
   const src = convertFileSrc(`${status.project}/${out.path}`);
@@ -152,9 +153,17 @@ function drawPreview(out, round) {
         .then((t) => (pre.textContent = t), showError);
       break;
     }
-    case "image":
-      box.append(el("img", null, { src: url, alt: out.path }));
+    case "image": {
+      const full = el("img", null, { src: url, alt: out.path });
+      if (sel.step !== "thumbnail") return box.append(full);
+      // Beside the title at 168x94, about how a feed shows it. The sheet's
+      // title isn't read yet (M3-2), so this is the project's.
+      const feed = el("div", null, { class: "feed" });
+      feed.append(el("img", null, { src: url, alt: "", width: 168, height: 94 }), el("span", status.title));
+      box.append(full, feed);
+      box.classList.add("thumb");
       break;
+    }
     case "audio":
     case "video":
       box.append(el(out.kind, null, { src: url, controls: "", preload: "metadata" }));

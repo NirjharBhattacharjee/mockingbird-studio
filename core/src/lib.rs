@@ -5,3 +5,4 @@ pub mod mcp;
 pub mod ops;
 pub mod project;
 pub mod store;
+pub mod thumbnail;
