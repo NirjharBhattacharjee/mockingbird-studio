@@ -310,18 +310,24 @@ pub fn start_mockingbird(
         ));
     }
     let args = match serde_json::from_str::<serde_json::Value>(args) {
-        Ok(v) if v.is_object() => v.to_string(),
+        Ok(v) if v.is_object() => v,
         _ => {
             return Err(
                 "args: a mockingbird job needs its tool's arguments as a JSON object".into(),
             );
         }
     };
+    if let Some(out) = args.get("out")
+        && !out.as_str().is_some_and(|o| Path::new(o).is_absolute())
+    {
+        return Err("out: mockingbird needs an absolute path".into());
+    }
+    let args = args.to_string();
     let exe = std::env::current_exe().map_err(|e| format!("can't find this program: {e}"))?;
     let command = vec![
         exe.to_string_lossy().into_owned(),
         "mockingbird-call".into(),
-        mockingbird::program(),
+        mockingbird::program()?,
         tool.into(),
         args.clone(),
     ];

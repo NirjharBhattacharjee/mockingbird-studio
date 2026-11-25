@@ -213,16 +213,21 @@ fn mb_start(home: &Path, project: &Path, tool: &str, args: Value) -> Result<Valu
     cli(home, &argv)
 }
 
-/// Waits for a job to end however long it takes, and returns it.
-fn wait_end(home: &Path, id: &str) -> Value {
+/// Waits for a job to end, without a deadline when `within` is `None`, and
+/// returns it.
+fn wait_end(home: &Path, id: &str, within: Option<Duration>) -> Value {
+    let end = within.map(|d| Instant::now() + d);
     loop {
         let j = job(home, id);
         if !matches!(j["state"].as_str(), Some("queued" | "running")) {
             return j;
         }
+        assert!(end.is_none_or(|e| Instant::now() < e), "timed out: {j}");
         std::thread::sleep(Duration::from_millis(500));
     }
 }
+
+const MINUTE: Option<Duration> = Some(Duration::from_secs(60));
 
 #[test]
 fn a_mockingbird_job_calls_one_tool_over_mcp() {
@@ -280,7 +285,7 @@ cat > /dev/null
         .as_str()
         .unwrap()
         .to_string();
-    let j = wait_end(&home, &id);
+    let j = wait_end(&home, &id, MINUTE);
     assert_eq!(j["state"], "done", "{j}");
     assert_eq!(j["kind"], "mockingbird");
     assert_eq!(j["outputs"], json!(["renders/a.mp4"]));
@@ -292,11 +297,52 @@ cat > /dev/null
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(wait_end(&home, &id)["state"], "failed");
+    assert_eq!(wait_end(&home, &id, MINUTE)["state"], "failed");
+
+    // A server that dies while something it started holds stdout open.
+    let orphan = home.join("orphan-mockingbird");
+    fs::write(&orphan, "#!/bin/sh\nsleep 30 &\nexit 0\n").unwrap();
+    Command::new("chmod")
+        .arg("755")
+        .arg(&orphan)
+        .status()
+        .unwrap();
+    let config = |v: &str| fs::write(home.join("config.toml"), format!("mockingbird = {v}\n"));
+    config(&format!("{:?}", orphan.to_str().unwrap())).unwrap();
+    let began = Instant::now();
+    let id = mb_start(&home, &dir, "motion", json!({})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let j = wait_end(&home, &id, MINUTE);
+    assert_eq!(j["state"], "failed", "{j}");
+    assert!(
+        j["log"]
+            .as_str()
+            .unwrap()
+            .contains("exited without replying"),
+        "{j}"
+    );
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        began.elapsed()
+    );
+
+    // mockingbird set to something that isn't a path is refused.
+    config("1").unwrap();
+    let err = mb_start(&home, &dir, "motion", json!({})).unwrap_err();
+    assert!(err.contains("program's path"), "{err}");
+    config(&format!("{:?}", fake.to_str().unwrap())).unwrap();
 
     for (tool, args) in [
         ("transcribe", json!({})),
         ("motion", json!(["not", "an", "object"])),
+        (
+            "motion",
+            json!({"script": "/x/page.html", "out": "renders/a.mp4"}),
+        ),
+        ("motion", json!({"script": "/x/page.html", "out": 1})),
     ] {
         assert!(mb_start(&home, &dir, tool, args).is_err(), "{tool}");
     }
@@ -364,7 +410,7 @@ fn a_real_motion_call_runs_to_the_end() {
         .unwrap()
         .to_string();
     let began = Instant::now();
-    let j = wait_end(&home, &id);
+    let j = wait_end(&home, &id, None);
     eprintln!(
         "motion of {secs} s: {} after {:?}\n{}",
         j["state"],
