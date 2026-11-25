@@ -129,3 +129,25 @@ dialog .actions { justify-content: flex-end; }
 #preview .sheet pre { padding: 0; margin: 4px 0; font: inherit; }
 #preview .sheet .declarations { margin-top: 16px; color: var(--soft); }
 #preview .sheet .error { color: #d70015; margin-bottom: 12px; }
+
+#jobs-button { width: 100%; margin-bottom: 16px; }
+#jobs-button[aria-pressed="true"] { border-color: var(--accent); }
+body.jobs main, body.jobs aside { display: none; }
+#jobs-page { grid-column: 2 / 4; padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+#jobs-page[hidden] { display: none; }
+#jobs-page h2 { margin: 8px 0 0; }
+#jobs { flex: none; max-height: 45%; overflow: auto; }
+#jobs li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+#jobs li.empty { color: var(--soft); border: 0; }
+#jobs li > button:first-child { flex: 1; display: flex; gap: 12px; text-align: left; border: 0; background: none; padding: 2px 6px; min-width: 0; }
+#jobs li > button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+#jobs .state { width: 70px; font-weight: 600; }
+#jobs .running .state { color: var(--accent); }
+#jobs .failed .state { color: #d70015; }
+#jobs .queued .state, #jobs .cancelled .state { color: var(--soft); }
+#jobs .when { margin-left: auto; color: var(--soft); font-variant-numeric: tabular-nums; }
+#jobs li > p { flex-basis: 100%; margin: 0 6px; font-size: 12px; }
+#jobs .outputs { color: var(--soft); }
+#job-log { flex: 1; min-height: 160px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; border: 1px solid var(--line); border-radius: 8px; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+#job-error { color: #d70015; margin: 0; }
+#jobs .stopping { color: var(--soft); padding: 0 12px; }
