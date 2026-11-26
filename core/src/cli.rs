@@ -35,6 +35,7 @@ fn build() -> Command {
                 .required(a.required);
             match a.kind {
                 ArgKind::TextList => arg = arg.action(ArgAction::Append).num_args(1..),
+                ArgKind::Flag => arg = arg.action(ArgAction::SetTrue),
                 // So a note like "- fix the intro" isn't read as a flag.
                 ArgKind::Text => arg = arg.allow_hyphen_values(true),
                 _ => {}
@@ -73,6 +74,7 @@ pub fn run(args: &[String]) -> ExitCode {
             ArgKind::Objects => m
                 .get_one::<String>(a.name)
                 .map(|s| serde_json::from_str(s).unwrap_or_else(|_| Value::from(s.as_str()))),
+            ArgKind::Flag => m.get_flag(a.name).then_some(Value::Bool(true)),
             // Parsed here, not by clap, so a bad number is the dispatch error.
             ArgKind::Integer => m.get_one::<String>(a.name).map(|s| {
                 s.parse::<u64>()

@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod common;
+
 const BIN: &str = env!("CARGO_BIN_EXE_mockingbird-studio");
 const ACCESS: &str = "ya29.upload-access-token-never-shown";
 const REFRESH: &str = "1//upload-refresh-token-never-shown";
@@ -131,6 +133,7 @@ fn handle(s: TcpStream, fake: &Mutex<Fake>) {
                 return;
             }
             f.inserts += 1;
+            f.got.clear();
             f.meta = serde_json::from_slice(&body).unwrap();
             let at = format!(
                 "Location: {}/upload/youtube/v3/videos?uploadType=resumable&upload_id=s1\r\n",
@@ -640,4 +643,156 @@ fn chunks_that_google_never_takes_give_up_after_five() {
     assert!(!ok);
     assert!(out.contains("broke 5 times in a row at byte 0"), "{out}");
     assert_eq!(out.matches("the upload broke at byte").count(), 4, "{out}");
+}
+
+impl World {
+    /// The film, thumbnail and description approved, and the upload step
+    /// waiting for its review.
+    fn in_review(&self) {
+        let p = self
+            .project_toml()
+            .replace(
+                "[[step]]\nid = \"thumbnail\"",
+                "[[step]]\nid = \"film\"\ngate = true\nstate = \"approved\"\nround = 1\n[[step.output]]\npath = \"upload/film.mp4\"\nkind = \"video\"\n\n[[step]]\nid = \"thumbnail\"",
+            )
+            .replace(
+                "after = [\"thumbnail\", \"description\"]\nstate = \"approved\"",
+                "after = [\"film\", \"thumbnail\", \"description\"]\nstate = \"review\"",
+            )
+            .replace(
+                "step = \"upload\"\nround = 1\ndecision = \"approved\"\nat = \"2026-11-26T10:00:00Z\"",
+                "step = \"film\"\nround = 1\ndecision = \"approved\"\nat = \"2026-11-26T09:20:00Z\"",
+            );
+        assert!(
+            p.contains("id = \"film\"") && p.contains("\"review\""),
+            "{p}"
+        );
+        std::fs::write(self.project.join("project.toml"), p).unwrap();
+    }
+
+    fn status(&self) -> Value {
+        let (ok, out) = self.cli(&["status", "--project", self.project.to_str().unwrap()]);
+        assert!(ok, "{out}");
+        serde_json::from_str(&out).unwrap()
+    }
+}
+
+#[test]
+fn approving_the_upload_step_posts_once_and_again_only_when_asked() {
+    let w = World::new(|_| {});
+    w.in_review();
+    let dir = w.project.to_str().unwrap();
+    let u = &w.status()["upload"];
+    assert_eq!(u["channel"], "main");
+    assert_eq!(u["visibility"], "public");
+    assert_eq!(u["signed_in"], true);
+
+    let (ok, out) = w.cli(&["approve", "--project", dir, "--step", "upload"]);
+    assert!(ok, "{out}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["youtube_job"]["kind"], "youtube", "{v}");
+    let jobs = w.jobs_end();
+    assert_eq!(jobs[0]["state"], "done", "{jobs:?}");
+    let p = w.project_toml();
+    assert_eq!(p.matches("[[post]]").count(), 1, "{p}");
+    assert!(p.contains("visibility_asked = \"public\""), "{p}");
+    let u = &w.status()["upload"];
+    assert_eq!(u["posts"][0]["url"], "https://youtu.be/vid_123-A", "{u}");
+    assert!(u["waiting"].is_null(), "{u}");
+
+    // Two files, or no video, are refused; one video is a new round.
+    let (ok, out) = w.cli(&[
+        "submit",
+        "--project",
+        dir,
+        "--step",
+        "upload",
+        "--files",
+        "upload/film.mp4",
+        "thumbnail/thumbnail.png",
+    ]);
+    assert!(!ok && out.contains("exactly one file"), "{out}");
+    let (ok, out) = w.cli(&[
+        "submit",
+        "--project",
+        dir,
+        "--step",
+        "upload",
+        "--files",
+        "upload/film.mp4",
+    ]);
+    assert!(ok, "{out}");
+    let (ok, out) = w.cli(&["approve", "--project", dir, "--step", "upload"]);
+    assert!(ok, "{out}");
+    assert!(
+        !out.contains("youtube_job"),
+        "a second approval queues nothing: {out}"
+    );
+    w.jobs_end();
+    assert_eq!(w.fake.lock().unwrap().inserts, 1, "no second upload");
+
+    let (ok, out) = w.cli(&["job-start", "--kind", "youtube", "--project", dir]);
+    assert!(!ok && out.contains("already posted"), "{out}");
+    let (ok, out) = w.cli(&[
+        "job-start",
+        "--kind",
+        "youtube",
+        "--project",
+        dir,
+        "--again",
+    ]);
+    assert!(ok, "{out}");
+    assert!(out.contains("--again"), "{out}");
+    w.jobs_end();
+    assert_eq!(w.fake.lock().unwrap().inserts, 2);
+    assert_eq!(w.project_toml().matches("[[post]]").count(), 2);
+}
+
+#[test]
+fn an_mcp_approval_on_a_public_niche_asks_for_private() {
+    let w = World::new(|_| {});
+    w.in_review();
+    let base = w.fake.lock().unwrap().base.clone();
+    let mut c = common::Client::start_env(
+        w.home.path(),
+        &[
+            (
+                "MOCKINGBIRD_STUDIO_KEYCHAIN_DIR",
+                w.keychain.path().to_str().unwrap(),
+            ),
+            ("MOCKINGBIRD_STUDIO_GOOGLE", &base),
+        ],
+    );
+    let (v, _) = c.call(
+        "approve",
+        json!({"project": w.project, "step": "upload", "note": "yes, post it"}),
+    );
+    assert_eq!(v["via"], "mcp", "{v}");
+    assert_eq!(v["youtube_job"]["kind"], "youtube", "{v}");
+    let jobs = w.jobs_end();
+    assert_eq!(jobs[0]["state"], "done", "{jobs:?}");
+    assert_eq!(
+        w.fake.lock().unwrap().meta["status"]["privacyStatus"],
+        "private"
+    );
+    let p = w.project_toml();
+    assert!(p.contains("visibility_asked = \"private\""), "{p}");
+}
+
+#[test]
+fn an_approval_with_no_channel_signed_in_posts_nothing_and_status_says_why() {
+    let w = World::new(|_| {});
+    w.in_review();
+    std::fs::remove_file(w.keychain.path().join("main")).unwrap();
+    let dir = w.project.to_str().unwrap();
+    let (ok, out) = w.cli(&["approve", "--project", dir, "--step", "upload"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("main isn't signed in"), "{out}");
+    assert!(w.jobs_end().is_empty());
+    let u = &w.status()["upload"];
+    assert!(
+        u["waiting"].as_str().unwrap().contains("youtube_connect"),
+        "{u}"
+    );
+    assert!(w.fake.lock().unwrap().paths.is_empty());
 }

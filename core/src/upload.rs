@@ -92,11 +92,15 @@ fn live(claim: &Post) -> bool {
             .is_some_and(|j| matches!(j.state, JobState::Queued | JobState::Running))
 }
 
-/// Refuses a project that's posted or being posted.
-fn check_unposted(p: &Project) -> Result<()> {
+/// Refuses a project that's posted or being posted. `again` lets a posted
+/// project post once more; a live claim stops it all the same.
+fn check_unposted(p: &Project, again: bool) -> Result<()> {
     for post in &p.posts {
-        if post.state.is_none() {
-            return Err(format!("this project is already posted: {}", post.url));
+        if post.state.is_none() && !again {
+            return Err(format!(
+                "this project is already posted: {}. job_start with again posts it once more",
+                post.url
+            ));
         }
         if live(post) {
             return Err(format!(
@@ -108,13 +112,8 @@ fn check_unposted(p: &Project) -> Result<()> {
     Ok(())
 }
 
-fn plan(dir: &Path) -> Result<Plan> {
-    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
-    check_unposted(&p)?;
-    let step = approved(&p, STEP)?;
-    let video = the_only(step, Kind::Video, "video")?;
-    let thumbnail = the_only(approved(&p, "thumbnail")?, Kind::Image, "image")?;
-    let (sheet, _) = sheet::submitted(dir, approved(&p, "description")?.round)?;
+/// The channel label a project posts to and the visibility it asks for.
+fn target(p: &Project) -> Result<(String, Visibility)> {
     let config = store::read_config()?;
     let niche = p
         .niche
@@ -128,17 +127,33 @@ fn plan(dir: &Path) -> Result<Plan> {
             return Err("there's more than one channel; set the niche's channel".into());
         }
     };
-    if !youtube::signed_in(&label)? {
-        return Err(format!(
-            "{label} isn't signed in. Sign in with youtube_connect"
-        ));
-    }
-    // PRD F5: an approval that came through MCP posts private.
-    let by_mcp = p.last_decision(STEP).is_some_and(|d| d.via == Via::Mcp);
+    // PRD F5: an approval of this round that came through MCP posts private.
+    let round = p.step(STEP)?.round;
+    let by_mcp = p
+        .last_decision(STEP)
+        .is_some_and(|d| d.via == Via::Mcp && d.decision == Verdict::Approved && d.round == round);
     let visibility = match niche {
         Some(n) if !by_mcp => n.visibility,
         _ => Visibility::Private,
     };
+    Ok((label, visibility))
+}
+
+fn not_signed_in(label: &str) -> String {
+    format!("{label} isn't signed in. Sign in with youtube_connect")
+}
+
+fn plan(dir: &Path, again: bool) -> Result<Plan> {
+    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
+    check_unposted(&p, again)?;
+    let step = approved(&p, STEP)?;
+    let video = the_only(step, Kind::Video, "video")?;
+    let thumbnail = the_only(approved(&p, "thumbnail")?, Kind::Image, "image")?;
+    let (sheet, _) = sheet::submitted(dir, approved(&p, "description")?.round)?;
+    let (label, visibility) = target(&p)?;
+    if !youtube::signed_in(&label)? {
+        return Err(not_signed_in(&label));
+    }
     Ok(Plan {
         round: step.round,
         video: dir.join(&video.path),
@@ -149,9 +164,59 @@ fn plan(dir: &Path) -> Result<Plan> {
     })
 }
 
+/// The upload step's part of `status`: the posts, where the next one goes
+/// and as what, and why an approved step has nothing posting.
+pub fn status(p: &Project, jobs: &[Job]) -> Value {
+    let mut v = json!({"posts": p.posts});
+    let error = match target(p) {
+        Ok((label, visibility)) => {
+            v["visibility"] = json!(visibility);
+            let signed_in = youtube::signed_in(&label);
+            v["signed_in"] = json!(signed_in.as_ref().is_ok_and(|s| *s));
+            v["channel"] = label.clone().into();
+            match signed_in {
+                Ok(true) => None,
+                Ok(false) => Some(not_signed_in(&label)),
+                Err(e) => Some(e),
+            }
+        }
+        Err(e) => Some(e),
+    };
+    if let Some(e) = &error {
+        v["error"] = e.as_str().into();
+    }
+    let busy = jobs
+        .iter()
+        .any(|j| j.kind == "youtube" && matches!(j.state, JobState::Queued | JobState::Running))
+        || p.posts.iter().any(live);
+    let posted = p.posts.iter().any(|x| x.state.is_none());
+    let stopped = p.posts.iter().any(|x| x.state.is_some());
+    let waiting = if busy {
+        None
+    } else if stopped {
+        let again = if posted { " with again" } else { "" };
+        Some(format!(
+            "An upload stopped before it finished. Start the youtube job{again}: it asks YouTube how far that upload got before sending anything."
+        ))
+    } else if !posted && approved(p, STEP).is_ok() {
+        Some(
+            error.unwrap_or_else(|| {
+                "Nothing is posting. Start it with job_start, kind youtube.".into()
+            }),
+        )
+    } else {
+        None
+    };
+    if let Some(w) = waiting {
+        v["waiting"] = w.into();
+    }
+    v
+}
+
 /// Queues a `youtube` job for the project in `dir`, which is canonical.
-pub fn start(dir: PathBuf) -> Result<Job> {
-    plan(&dir)?;
+/// `again` posts a project that's already posted; only a person asks for it.
+pub fn start(dir: PathBuf, again: bool) -> Result<Job> {
+    plan(&dir, again)?;
     let busy = jobs::list(Some(&dir))
         .into_iter()
         .any(|j| j.kind == "youtube" && matches!(j.state, JobState::Queued | JobState::Running));
@@ -159,11 +224,14 @@ pub fn start(dir: PathBuf) -> Result<Job> {
         return Err("a youtube job for this project is already queued or running".into());
     }
     let exe = std::env::current_exe().map_err(|e| format!("can't find this program: {e}"))?;
-    let command = vec![
+    let mut command = vec![
         exe.to_string_lossy().into_owned(),
         "youtube-upload".into(),
         dir.to_string_lossy().into_owned(),
     ];
+    if again {
+        command.push("--again".into());
+    }
     jobs::queue(
         "youtube",
         "upload",
@@ -175,13 +243,17 @@ pub fn start(dir: PathBuf) -> Result<Job> {
     )
 }
 
-/// `mockingbird-studio youtube-upload <project>`.
+/// `mockingbird-studio youtube-upload <project> [--again]`.
 pub fn run(args: &[String]) -> ExitCode {
-    let [dir] = args else {
-        eprintln!("usage: mockingbird-studio youtube-upload <project>");
-        return ExitCode::from(2);
+    let (dir, again) = match args {
+        [dir] => (dir, false),
+        [dir, a] if a == "--again" => (dir, true),
+        _ => {
+            eprintln!("usage: mockingbird-studio youtube-upload <project> [--again]");
+            return ExitCode::from(2);
+        }
     };
-    match upload(Path::new(dir)) {
+    match upload(Path::new(dir), again) {
         Ok(lines) => {
             println!("{lines}");
             ExitCode::SUCCESS
@@ -199,9 +271,9 @@ fn name(v: Visibility) -> String {
 
 /// Claims the post under the project's lock. A dead job's claim is taken
 /// over, and its session, if it had one, is returned to be asked about.
-fn claim(dir: &Path, plan: &Plan, job: &Option<String>) -> Result<Option<String>> {
+fn claim(dir: &Path, plan: &Plan, job: &Option<String>, again: bool) -> Result<Option<String>> {
     store::update_project(dir, |p| {
-        check_unposted(p)?;
+        check_unposted(p, again)?;
         let now = Timestamp::now();
         if let Some(c) = p.posts.iter_mut().find(|c| c.state.is_some()) {
             c.job = job.clone();
@@ -239,8 +311,8 @@ fn with_claim(dir: &Path, f: impl FnOnce(&mut Post)) -> Result<()> {
     })
 }
 
-fn upload(dir: &Path) -> Result<String> {
-    let plan = plan(dir)?;
+fn upload(dir: &Path, again: bool) -> Result<String> {
+    let plan = plan(dir, again)?;
     let size = fs::metadata(&plan.video)
         .map_err(|e| format!("{}: {e}", plan.video.display()))?
         .len();
@@ -259,7 +331,7 @@ fn upload(dir: &Path) -> Result<String> {
         .build()
         .into();
     let job = std::env::var("MOCKINGBIRD_STUDIO_JOB").ok();
-    let mut session = claim(dir, &plan, &job)?;
+    let mut session = claim(dir, &plan, &job, again)?;
     let mut resuming = session.is_some();
     if resuming {
         eprintln!("an earlier job left this upload unfinished; asking YouTube how far it got");
