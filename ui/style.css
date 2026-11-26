@@ -191,7 +191,7 @@ dialog .actions { justify-content: flex-end; }
 
 #jobs-button { width: 100%; margin-bottom: 16px; }
 #jobs-button[aria-pressed="true"] { border-color: var(--accent); }
-body.jobs main, body.jobs aside, body.settings main, body.settings aside { display: none; }
+:is(body.jobs, body.settings, body.today) :is(main, aside) { display: none; }
 #jobs-page { grid-column: 2 / 4; padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 #jobs-page[hidden] { display: none; }
 #jobs-page h2 { margin: 8px 0 0; }
@@ -230,3 +230,22 @@ body.jobs main, body.jobs aside, body.settings main, body.settings aside { displ
 #channels { margin: 0; padding-left: 20px; }
 #youtube-error, #scan-error { color: #d70015; margin: 0; }
 #scan-status { margin: 0; overflow-wrap: anywhere; }
+
+#today-button { width: 100%; margin-bottom: 8px; }
+#today-button[aria-pressed="true"] { border-color: var(--accent); }
+#today-page { grid-column: 2 / 4; padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#today-page[hidden] { display: none; }
+#today-page .hint, #today-page .meta { margin: 0; color: var(--soft); }
+#today-error, #today .error { color: #d70015; margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+#today { display: flex; flex-direction: column; gap: 12px; }
+#today .scan { border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+#today h2, #today h3 { margin: 0; }
+#today ol, #today ul { margin: 0; padding-left: 20px; }
+#today .topic { padding: 6px 0; border-bottom: 1px solid var(--line); }
+#today .topic:last-child { border: 0; }
+#today .topic p { margin: 2px 0; }
+#today .topic .picked { color: var(--soft); overflow-wrap: anywhere; }
+#today .link { color: var(--soft); font-size: 12px; overflow-wrap: anywhere; }
+#pick-text { margin: 0; font-weight: 600; }
+#pick-dialog { width: min(640px, 90vw); box-sizing: border-box; }
+#pick-dir { width: 100%; box-sizing: border-box; }

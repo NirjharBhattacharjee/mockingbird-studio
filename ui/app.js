@@ -486,6 +486,7 @@ function setJobsPage(open) {
   $("jobs-button").setAttribute("aria-pressed", String(open));
   if (open) {
     setSettingsPage(false);
+    setTodayPage(false);
     media()?.pause(); // the player is hidden, so it must not keep playing
     refreshJobs();
   }
@@ -570,7 +571,7 @@ function drawJobs() {
 
 $("jobs-button").onclick = () => setJobsPage(!jobsOpen());
 // Picking a step goes back to the step page.
-$("projects").addEventListener("click", () => { setJobsPage(false); setSettingsPage(false); }, true);
+$("projects").addEventListener("click", () => { setJobsPage(false); setSettingsPage(false); setTodayPage(false); }, true);
 
 $("stop-dialog").onclose = async () => {
   const j = pendingStop;
@@ -610,6 +611,7 @@ function setSettingsPage(open) {
   $("settings-button").setAttribute("aria-pressed", String(open));
   if (open) {
     setJobsPage(false);
+    setTodayPage(false);
     media()?.pause();
     $("settings-error").textContent = "";
     refreshNiches();
@@ -775,3 +777,163 @@ $("signin-form").onsubmit = async (e) => {
   button.textContent = "Sign in";
   refreshChannels();
 };
+
+// The Today page: each niche's latest scan, its shortlist, and starting a
+// project from a topic. `niches`, `topics`, `scan` and `topic_pick` only.
+let todayNiches = [];
+let todayScans = [];
+let todayErrors = [];
+let todayShown = "";
+let todayAsked = 0;
+let pendingPick = null; // {niche, day, topic} the folder dialog is about
+
+const todayOpen = () => document.body.classList.contains("today");
+
+function setTodayPage(open) {
+  document.body.classList.toggle("today", open);
+  $("today-page").hidden = !open;
+  $("today-button").setAttribute("aria-pressed", String(open));
+  if (open) {
+    setJobsPage(false);
+    setSettingsPage(false);
+    media()?.pause();
+    $("today-error").textContent = "";
+    refreshToday();
+  }
+}
+
+async function refreshToday() {
+  const n = ++todayAsked;
+  try {
+    const [{ niches }, { scans, errors }] = await Promise.all([op("niches"), op("topics")]);
+    if (n !== todayAsked) return;
+    [todayNiches, todayScans, todayErrors] = [niches, scans, errors];
+  } catch (e) {
+    if (n !== todayAsked) return;
+    $("today-error").textContent = String(e);
+  }
+  drawToday();
+}
+
+// A folder next to the selected project, named after the topic.
+function suggestDir(title, id) {
+  const near = sel.project ?? projects.find((p) => !p.error)?.project;
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || `topic-${id}`;
+  return near ? `${near.replace(/\/[^/]*\/?$/, "")}/${slug}` : "";
+}
+
+function drawToday() {
+  const now = JSON.stringify([todayNiches, todayScans, todayErrors]);
+  if (now === todayShown) return;
+  todayShown = now;
+  const box = $("today");
+  const open = new Set([...box.querySelectorAll("details[open]")].map((d) => d.dataset.niche));
+  box.replaceChildren();
+  if (!todayNiches.length) box.append(el("p", "No niches yet. Add one under Settings.", { class: "hint" }));
+  for (const nc of todayNiches) {
+    const card = el("section", null, { class: "scan", "aria-label": nc.name });
+    card.append(el("h2", nc.name));
+    const s = todayScans.find((x) => x.niche === nc.id);
+    const err = todayErrors.find((x) => x.niche === nc.id);
+    if (err) card.append(el("p", err.error, { class: "error" }));
+    if (!s) {
+      if (!err) card.append(el("p", "No scan yet.", { class: "meta" }));
+      box.append(card);
+      continue;
+    }
+    const by = { command: "your command", agent: "your agent" }[s.shortlist_by];
+    card.append(el("p", `Scanned ${new Date(s.at).toLocaleString()} · ${s.items.length} new items${by ? ` · shortlist by ${by}` : ""}`, { class: "meta" }));
+    for (const f of s.feeds) if (f.error) card.append(el("p", `${f.url}: ${f.error}`, { class: "error" }));
+    if (s.error) card.append(el("p", `The shortlist command failed: ${s.error}`, { class: "error" }));
+    const titleOf = (link) => s.items.find((i) => i.link === link)?.title ?? link;
+    if (!s.topics.length) {
+      card.append(el("p", s.items.length ? "No shortlist yet. Ask your agent to rank these items." : "Nothing new in the feeds.", { class: "meta" }));
+    } else {
+      const list = el("ol", null, { "aria-label": `${nc.name} shortlist` });
+      for (const t of s.topics) {
+        const li = el("li", null, { class: "topic" });
+        li.append(el("h3", t.title));
+        if (t.why) li.append(el("p", t.why));
+        const cites = el("ul");
+        for (const link of t.items) {
+          const c = el("li", titleOf(link));
+          c.append(" ", el("span", link, { class: "link" }));
+          cites.append(c);
+        }
+        if (t.items.length) li.append(cites);
+        if (t.project) {
+          const go = el("button", "Open the project", { type: "button" });
+          go.onclick = () => openProject(t.project);
+          li.append(el("p", `Started as ${t.project}`, { class: "picked" }), go);
+        } else {
+          const start = el("button", "Start a project…", { type: "button", "aria-label": `Start a project from ${t.title}` });
+          start.onclick = () => {
+            pendingPick = { niche: nc.id, day: s.day, topic: t.id };
+            $("pick-text").textContent = t.title;
+            $("pick-dir").value = suggestDir(t.title, t.id);
+            $("pick-dialog").returnValue = "";
+            $("pick-dialog").showModal();
+          };
+          li.append(start);
+        }
+        list.append(li);
+      }
+      card.append(list);
+    }
+    if (s.items.length) {
+      const all = el("details", null, { "data-niche": nc.id });
+      all.open = open.has(nc.id);
+      all.append(el("summary", `All ${s.items.length} items`));
+      const ul = el("ul");
+      for (const i of s.items) {
+        const li = el("li", i.title);
+        li.append(" ", el("span", i.link, { class: "link" }));
+        ul.append(li);
+      }
+      all.append(ul);
+      card.append(all);
+    }
+    box.append(card);
+  }
+}
+
+function openProject(path) {
+  Object.assign(sel, { project: path, step: null });
+  setTodayPage(false);
+  refresh();
+}
+
+$("today-button").onclick = () => setTodayPage(!todayOpen());
+
+$("scan-now").onclick = async () => {
+  const b = $("scan-now");
+  b.disabled = true;
+  b.textContent = "Scanning…";
+  $("today-error").textContent = "";
+  try {
+    const { errors } = await op("scan");
+    $("today-error").textContent = errors.map((e) => `${e.niche}: ${e.error}`).join("\n");
+  } catch (e) {
+    $("today-error").textContent = String(e);
+  }
+  b.disabled = false;
+  b.textContent = "Scan now";
+  refreshToday();
+};
+
+$("pick-dialog").onclose = async () => {
+  const p = pendingPick;
+  pendingPick = null;
+  if ($("pick-dialog").returnValue !== "pick" || !p) return;
+  $("today-error").textContent = "";
+  try {
+    const got = await op("topic_pick", { ...p, dir: $("pick-dir").value.trim() });
+    openProject(got.project);
+  } catch (e) {
+    $("today-error").textContent = String(e);
+    refreshToday();
+  }
+};
+
+// The scheduled scan or an agent can change the shortlist while it's open.
+setInterval(() => todayOpen() && !document.hidden && refreshToday(), 10000);

@@ -573,10 +573,11 @@ pub(crate) fn new_project(
     workflow: Option<String>,
 ) -> Result<PathBuf> {
     let shown = dir.display();
-    // Nothing here expands ~ or $HOME: they'd make a folder named "~".
-    if dir.to_string_lossy().starts_with(['~', '$']) {
+    // Nothing here expands ~ or $HOME, and a relative path would land
+    // wherever the server happened to start.
+    if !dir.is_absolute() {
         return Err(format!(
-            "{shown}: write the folder's full path; ~ and $ aren't expanded here"
+            "{shown}: write the folder's full path, starting with /; ~, $ and relative paths aren't expanded here"
         ));
     }
     if dir.join(PROJECT_FILE).exists() {
@@ -1151,9 +1152,9 @@ mod tests {
     }
 
     #[test]
-    fn project_new_refuses_home_shorthand_and_folders_with_files() {
+    fn project_new_refuses_relative_paths_and_folders_with_files() {
         let t = setup();
-        for dir in ["~/videos/x", "~", "$HOME/videos/x"] {
+        for dir in ["~/videos/x", "~", "$HOME/videos/x", "videos/x", "./x"] {
             let e = run("project_new", json!({"dir": dir, "title": "T"})).unwrap_err();
             assert!(e.contains("full path"), "{e}");
             assert!(!Path::new(dir).exists());
