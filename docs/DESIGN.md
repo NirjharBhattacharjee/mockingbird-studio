@@ -253,6 +253,14 @@ at = 2026-11-25T09:40:12Z
 via = "window"               # window | cli | mcp
 note = "The cold open is slow."
 
+[[decision]]                 # from M5: one short of the shorts step
+step = "shorts"
+round = 1
+decision = "keep"            # keep | drop
+path = "shorts/hook.mp4"
+at = 2026-11-25T12:10:00Z
+via = "window"
+
 [[note]]
 id = 1
 step = "script"
@@ -388,7 +396,7 @@ record a decision as coming from the window.
 Later: `job_start`, `jobs`, `job`, `job_cancel` (M2); `niches`, `niche_add`,
 `niche_set`, `niche_remove`, `feed_add`, `feed_remove`, `youtube_connect`,
 `youtube_status`, `youtube_disconnect` (M3); `scan`, `topics`, `topics_set`,
-`topic_pick`, `scan_time` (M4); `workflows` (M5).
+`topic_pick`, `scan_time` (M4); `workflows`, `claim`, `unclaim`, `short_decide` (M5).
 
 ### CLI
 
@@ -757,6 +765,13 @@ feeds = ["https://example.com/feed.xml"]
 - A project made with `short` is one short, and posts through its own
   upload step like any project. Shorts cut inside a film's project get a
   decision each, and then a post each, with their own title and description.
+- `short_decide` (project, path, decision, note?) keeps or drops one output
+  of `shorts` while its round is in review. It's a `[[decision]]` row with
+  `path`, so it has the time and `via` like any other. Deciding again adds a
+  row and the latest counts; a new round starts undecided. `status` puts
+  each output's decision on it, `last_decision` skips these rows, and the
+  window shows Keep and Drop beside each short. Approving `shorts` doesn't
+  wait for every short to be decided.
 
 ## Security and privacy
 

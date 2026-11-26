@@ -201,6 +201,21 @@ pub const OPS: &[Op] = &[
         run: redo,
     },
     Op {
+        name: "short_decide",
+        help: "Keep or drop one short of the shorts step while its round is in review. Written to project.toml with the time; deciding again adds a row and the latest counts. status shows each short's decision.",
+        args: &[
+            PROJECT,
+            req(
+                "path",
+                Text,
+                "The short, as listed in the shorts step's outputs.",
+            ),
+            req("decision", Text, "keep or drop."),
+            opt("note", Text, "Why."),
+        ],
+        run: short_decide,
+    },
+    Op {
         name: "job_start",
         help: "Queue a long job. It runs in a separate runner, two at a time, and keeps going after the chat or window that queued it closes. The kind tool runs a tool declared in config.toml with values for its placeholders, never a command line. The kind mockingbird makes one call to mockingbird's motion, render or look with args, and waits however long it takes. The kind youtube posts a project whose upload step is approved, once.",
         args: &[
@@ -669,6 +684,11 @@ pub(crate) fn status_of(dir: &Path) -> Result<Value> {
         .iter()
         .map(|s| {
             let mut v = json!(s);
+            for (o, out) in s.outputs.iter().zip(v["output"].as_array_mut().unwrap()) {
+                if let Some(d) = p.output_decision(&s.id, &o.path) {
+                    out["decision"] = json!(d);
+                }
+            }
             v["last_decision"] = json!(p.last_decision(&s.id).filter(|d| d.round == s.round));
             v["ready"] = p.ready(&s.id).into();
             v
@@ -914,6 +934,23 @@ fn redo(a: &Args, via: Via) -> Result<Value> {
     })
 }
 
+fn short_decide(a: &Args, via: Via) -> Result<Value> {
+    let keep = match a.text("decision").as_str() {
+        "keep" => true,
+        "drop" => false,
+        other => return Err(format!("decision is keep or drop, not {other:?}")),
+    };
+    store::update_project(&a.project()?, |p| {
+        Ok(json!(p.short_decide(
+            &a.text("path"),
+            keep,
+            a.opt("note"),
+            via,
+            Timestamp::now()
+        )?))
+    })
+}
+
 fn job_start(a: &Args, via: Via) -> Result<Value> {
     let kind = a.text("kind");
     if kind == "youtube" {
@@ -1063,6 +1100,7 @@ mod tests {
                 "note_done",
                 "approve",
                 "redo",
+                "short_decide",
                 "job_start",
                 "jobs",
                 "job",
@@ -1657,6 +1695,44 @@ mod tests {
         );
         run("unclaim", json!({"project": dir, "step": "research"})).unwrap();
         assert_eq!(ready(), json!(["research"]));
+    }
+
+    #[test]
+    fn short_decide_writes_a_row_and_status_shows_it_on_the_output() {
+        let t = setup();
+        let dir = new_project(t.path(), "short-decisions");
+        fs::write(Path::new(&dir).join("shorts/a.mp4"), b"x").unwrap();
+        let args = |d: &str| json!({"project": dir, "path": "shorts/a.mp4", "decision": d});
+        assert!(run("short_decide", args("keep")).is_err()); // shorts is in todo
+        store::update_project(Path::new(&dir), |p| {
+            let s = p.steps.iter_mut().find(|s| s.id == "shorts").unwrap();
+            s.state = State::Review;
+            s.round = 1;
+            s.outputs = vec![Output {
+                path: "shorts/a.mp4".into(),
+                kind: Kind::Video,
+                rest: Default::default(),
+            }];
+            Ok(())
+        })
+        .unwrap();
+        let err = run("short_decide", args("maybe")).unwrap_err();
+        assert!(err.contains("keep or drop"), "{err}");
+        let d = run("short_decide", args("keep")).unwrap();
+        assert_eq!(
+            (&d["decision"], &d["via"], &d["path"]),
+            (&json!("keep"), &json!("cli"), &json!("shorts/a.mp4"))
+        );
+        assert!(d["at"].is_string());
+        let status = run("status", json!({"project": dir})).unwrap();
+        let shorts = status["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "shorts")
+            .unwrap();
+        assert_eq!(shorts["output"][0]["decision"]["decision"], "keep");
+        assert!(shorts["last_decision"].is_null());
     }
 
     #[test]

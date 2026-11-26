@@ -130,6 +130,9 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 #files { display: flex; flex-wrap: wrap; gap: 6px; }
 #files button[aria-pressed="true"] { border-color: var(--accent); }
+#files .short { display: inline-flex; align-items: center; gap: 4px; }
+#files .said { font-size: 11px; color: var(--soft); }
+#files .said.keep { color: var(--accent); }
 
 .actions { display: flex; gap: 8px; }
 #approve:not(:disabled) { background: var(--accent); border-color: var(--accent); color: white; }

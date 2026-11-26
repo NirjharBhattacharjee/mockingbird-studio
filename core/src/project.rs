@@ -9,6 +9,9 @@ use crate::niche::Visibility;
 
 pub const SCHEMA: u32 = 1;
 
+/// The step whose outputs each get a keep or drop.
+pub const SHORTS: &str = "shorts";
+
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -128,6 +131,10 @@ pub enum Via {
 pub enum Verdict {
     Approved,
     Redo,
+    /// Per short, from `short_decide`: post it.
+    Keep,
+    /// Per short, from `short_decide`: don't post it.
+    Drop,
 }
 
 /// Never edited or removed once written.
@@ -136,6 +143,9 @@ pub struct Decision {
     pub step: String,
     pub round: u32,
     pub decision: Verdict,
+    /// The one output a keep or drop is about. Absent on a step's decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     #[serde(deserialize_with = "time")]
     pub at: Timestamp,
     pub via: Via,
@@ -444,6 +454,7 @@ impl Project {
                     step: s.id.clone(),
                     round: s.round,
                     decision: Verdict::Redo,
+                    path: None,
                     at: now,
                     via,
                     note: Some(note.clone()),
@@ -466,11 +477,54 @@ impl Project {
             step: step.to_string(),
             round,
             decision,
+            path: None,
             at,
             via,
             note,
             rest: Default::default(),
         });
+    }
+
+    /// Keeps or drops one short of the `shorts` step's round in review.
+    /// Deciding again adds a row; the latest one counts.
+    pub fn short_decide(
+        &mut self,
+        path: &str,
+        keep: bool,
+        note: Option<String>,
+        via: Via,
+        now: Timestamp,
+    ) -> Result<&Decision> {
+        let step = self.step(SHORTS)?;
+        if step.state != State::Review {
+            return Err(format!(
+                "step {SHORTS:?} is {:?}; a short is kept or dropped while its round is in review",
+                step.state
+            ));
+        }
+        if !step.outputs.iter().any(|o| o.path == path) {
+            return Err(format!("{path:?} isn't one of this round's shorts"));
+        }
+        self.decisions.push(Decision {
+            step: SHORTS.into(),
+            round: step.round,
+            decision: if keep { Verdict::Keep } else { Verdict::Drop },
+            path: Some(path.into()),
+            at: now,
+            via,
+            note,
+            rest: Default::default(),
+        });
+        Ok(self.decisions.last().unwrap())
+    }
+
+    /// The latest keep or drop on `path` in step `id`'s current round.
+    pub fn output_decision(&self, id: &str, path: &str) -> Option<&Decision> {
+        let round = self.step(id).ok()?.round;
+        self.decisions
+            .iter()
+            .rev()
+            .find(|d| d.step == id && d.round == round && d.path.as_deref() == Some(path))
     }
 
     pub fn note_add(
@@ -521,8 +575,12 @@ impl Project {
         Ok(note)
     }
 
+    /// The last decision on the step itself, not on one of its outputs.
     pub fn last_decision(&self, step: &str) -> Option<&Decision> {
-        self.decisions.iter().rev().find(|d| d.step == step)
+        self.decisions
+            .iter()
+            .rev()
+            .find(|d| d.step == step && d.path.is_none())
     }
 }
 
@@ -786,6 +844,69 @@ mod tests {
         );
         p.redo("research", "x", Via::Cli, now()).unwrap();
         assert!(p.step("script").unwrap().claim.is_none());
+    }
+
+    #[test]
+    fn each_short_is_kept_or_dropped_in_review_and_the_latest_counts() {
+        let mut p = project();
+        let shorts = |n: usize| {
+            (1..=n)
+                .map(|i| Output {
+                    path: format!("shorts/{i}.mp4"),
+                    kind: Kind::Video,
+                    rest: Default::default(),
+                })
+                .collect::<Vec<_>>()
+        };
+        // Walk to previews approved so shorts can be submitted.
+        for (id, gate) in [
+            ("script", true),
+            ("voice", true),
+            ("look", true),
+            ("assets", false),
+            ("previews", true),
+        ] {
+            p.submit(id, out(), None, Via::Cli, now()).unwrap();
+            if gate {
+                p.approve(id, None, Via::Cli, now()).unwrap();
+            }
+        }
+        assert!(
+            p.short_decide("shorts/1.mp4", true, None, Via::Cli, now())
+                .is_err()
+        ); // todo
+        p.submit(SHORTS, shorts(2), None, Via::Cli, now()).unwrap();
+        assert!(
+            p.short_decide("shorts/9.mp4", true, None, Via::Cli, now())
+                .is_err()
+        );
+        p.short_decide("shorts/1.mp4", true, None, Via::Window, now())
+            .unwrap();
+        p.short_decide(
+            "shorts/1.mp4",
+            false,
+            Some("weak hook".into()),
+            Via::Mcp,
+            now(),
+        )
+        .unwrap();
+        let d = p.output_decision(SHORTS, "shorts/1.mp4").unwrap();
+        assert_eq!((d.decision, d.via, d.round), (Verdict::Drop, Via::Mcp, 1));
+        assert!(p.output_decision(SHORTS, "shorts/2.mp4").is_none());
+        // A keep or drop isn't the step's decision.
+        assert!(p.last_decision(SHORTS).is_none());
+        let text = toml::to_string(&p).unwrap();
+        assert!(text.contains("path = \"shorts/1.mp4\""), "{text}");
+        assert_eq!(toml::from_str::<Project>(&text).unwrap(), p);
+        // A new round starts undecided; approved shorts are fixed.
+        p.redo(SHORTS, "recut", Via::Cli, now()).unwrap();
+        p.submit(SHORTS, shorts(1), None, Via::Cli, now()).unwrap();
+        assert!(p.output_decision(SHORTS, "shorts/1.mp4").is_none());
+        p.approve(SHORTS, None, Via::Cli, now()).unwrap();
+        assert!(
+            p.short_decide("shorts/1.mp4", true, None, Via::Cli, now())
+                .is_err()
+        );
     }
 
     #[test]
