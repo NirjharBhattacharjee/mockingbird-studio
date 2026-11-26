@@ -9,6 +9,7 @@
 </head>
 <body>
   <nav aria-label="Projects">
+    <button id="today-button" type="button" aria-pressed="false">Today</button>
     <button id="jobs-button" type="button" aria-pressed="false">Jobs</button>
     <button id="settings-button" type="button" aria-pressed="false">Settings</button>
     <h2>Projects</h2>
@@ -28,6 +29,14 @@
     </div>
     <p id="error" role="alert"></p>
   </main>
+
+  <section id="today-page" aria-label="Today" hidden>
+    <h1>Today</h1>
+    <p class="hint">Each niche's latest scan and its shortlist. A scan from here fetches the feeds only: ask your agent to rank the items, or let the scheduled scan run your command.</p>
+    <div class="row"><button id="scan-now" type="button">Scan now</button></div>
+    <p id="today-error" role="alert"></p>
+    <div id="today"></div>
+  </section>
 
   <section id="jobs-page" aria-label="Jobs" hidden>
     <h1>Jobs</h1>
@@ -95,6 +104,17 @@
       <div class="actions">
         <button value="cancel" formnovalidate>Cancel</button>
         <button value="remove">Remove</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="pick-dialog">
+    <form method="dialog">
+      <p id="pick-text"></p>
+      <label for="pick-dir">The new project's folder</label>
+      <input id="pick-dir" required placeholder="/Users/you/Videos/my-topic">
+      <div class="actions">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button value="pick">Start the project</button>
       </div>
     </form>
   </dialog>
