@@ -757,12 +757,13 @@ feeds = ["https://example.com/feed.xml"]
 - MCP tests start the binary and speak JSON-RPC over its stdio.
 - Tests that need ffmpeg or mockingbird are `#[ignore]`.
 - The upload job is tested against a small server the test starts, which
-  speaks enough of the resumable protocol. Tests take a token from the
-  environment, so they touch neither the Keychain nor Google. One upload to
-  a real test channel is done by hand, as evidence for the PR.
+  speaks enough of the token exchange, the resumable protocol and
+  `thumbnails.set`. It uses the sign-in's variables below, so it touches
+  neither the Keychain nor Google. One upload to a real test channel is
+  done by hand, as evidence for the PR.
 - The sign-in is tested against a fake Google the test starts. Three
   variables make that possible: `MOCKINGBIRD_STUDIO_GOOGLE` points the consent,
-  token and revoke endpoints at it (an address on 127.0.0.1 only),
+  token and revoke endpoints and YouTube's API host at it (an address on 127.0.0.1 only),
   `MOCKINGBIRD_STUDIO_BROWSER` replaces `open`, and
   `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps Keychain items in a folder. Only
   debug builds read them.

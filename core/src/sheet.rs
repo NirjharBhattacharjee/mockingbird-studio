@@ -45,6 +45,15 @@ pub fn read(dir: &Path) -> Result<Sheet> {
     store::read(&dir.join(PATH))
 }
 
+/// The sheet as submitted in `round`, so what's approved is what's posted.
+/// `kept` is false when the round has no copy and the live file stands in.
+pub fn submitted(dir: &Path, round: u32) -> Result<(Sheet, bool)> {
+    match crate::rounds::kept(dir, "description", round, PATH)? {
+        Some(path) => Ok((store::read(&path)?, true)),
+        None => Ok((read(dir)?, false)),
+    }
+}
+
 /// The description step's files must include the sheet, and the sheet
 /// must pass `Sheet::check`.
 pub fn check_submit(dir: &Path, paths: &[String]) -> Result<()> {

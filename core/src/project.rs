@@ -4,6 +4,8 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::niche::Visibility;
+
 pub const SCHEMA: u32 = 1;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -24,6 +26,8 @@ pub struct Project {
     pub decisions: Vec<Decision>,
     #[serde(default, rename = "note")]
     pub notes: Vec<Note>,
+    #[serde(default, rename = "post", skip_serializing_if = "Vec::is_empty")]
+    pub posts: Vec<Post>,
     /// Keys this version doesn't know, kept so a write never drops them.
     #[serde(flatten)]
     pub rest: toml::Table,
@@ -147,6 +151,30 @@ pub struct Note {
     pub rest: toml::Table,
 }
 
+/// A video the `youtube` job put up. Never removed. The job fills in
+/// `thumbnail` once `thumbnails.set` has answered.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Post {
+    pub step: String,
+    pub round: u32,
+    #[serde(deserialize_with = "time")]
+    pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+    pub video: String,
+    pub url: String,
+    pub channel: String,
+    pub visibility_asked: Visibility,
+    /// What Google's reply said.
+    pub visibility_set: String,
+    /// set, refused or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteState {
@@ -220,6 +248,7 @@ impl Project {
             steps,
             decisions: vec![],
             notes: vec![],
+            posts: vec![],
             rest: Default::default(),
         })
     }

@@ -14,4 +14,5 @@ pub mod setup;
 pub mod sheet;
 pub mod store;
 pub mod thumbnail;
+pub mod upload;
 pub mod youtube;
