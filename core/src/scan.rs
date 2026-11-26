@@ -857,15 +857,14 @@ mod tests {
         for (body, why) in cases {
             let root = tempfile::tempdir().unwrap();
             let (n, mut s) = scanned(root.path());
+            // Room for a loaded machine, except where the stop is the test.
+            let limit = if body.starts_with("sleep") {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_secs(10)
+            };
             let began = Instant::now();
-            shortlist(
-                root.path(),
-                &n,
-                &mut s,
-                &fake(bin.path(), body),
-                Duration::from_millis(500),
-            )
-            .unwrap();
+            shortlist(root.path(), &n, &mut s, &fake(bin.path(), body), limit).unwrap();
             assert!(began.elapsed() < Duration::from_secs(5), "{body}");
             let back = on_disk(root.path(), &s);
             let e = back.error.unwrap_or_default();

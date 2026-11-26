@@ -140,7 +140,8 @@ function drawUpload(s) {
   const u = s?.id === "upload" ? status?.upload : null;
   const box = $("upload");
   box.hidden = !u;
-  $("approve").textContent = u ? "Approve and post" : "Approve";
+  const posted = u?.posts.some((p) => !p.state);
+  $("approve").textContent = u?.signed_in && !posted ? "Approve and post" : "Approve";
   const thumb = status?.steps.find((t) => t.id === "thumbnail")?.output?.find((o) => o.kind === "image");
   const key = u ? JSON.stringify([sel.project, s.round, u, thumb]) : "";
   if (key === uploadKey) return;
@@ -153,7 +154,7 @@ function drawUpload(s) {
 
   for (const p of u.posts) {
     if (p.state) {
-      line(`Uploading to ${p.channel}…`);
+      line(p.live ? `Uploading to ${p.channel}…` : `Stopped: an upload to ${p.channel} didn't finish.`, p.live ? "hint" : "warn");
       continue;
     }
     const posted = el("p", `Posted to ${p.channel} as ${p.visibility_set}, ${new Date(p.at).toLocaleString()}: `, { class: "posted" });
@@ -169,7 +170,7 @@ function drawUpload(s) {
   }
   if (u.waiting) line(u.waiting, "warn");
 
-  if (u.channel && !u.posts.some((p) => !p.state)) {
+  if (u.channel && !posted) {
     line(`Goes to ${u.channel} as ${u.visibility}. An approval through your agent posts private.`);
   }
   if (u.error && !u.waiting) line(u.error, "warn");

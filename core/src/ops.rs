@@ -215,7 +215,7 @@ pub const OPS: &[Op] = &[
             opt(
                 "again",
                 Flag,
-                "For kind youtube: post a project that's already posted, once more. Only when the person asked for a second post.",
+                "For kind youtube: post a project that's already posted, once more. Only when the person asked for a second post. Through MCP, a second post goes up private.",
             ),
         ],
         run: job_start,
@@ -673,6 +673,9 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
     let step = a.text("step");
     let paths: Vec<String> = outputs.iter().map(|o| o.path.clone()).collect();
     let mut v = store::update_project(&dir, |p| {
+        if step == "upload" {
+            upload::check_idle(p)?;
+        }
         p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
         // After the gate check, so a gate refusal comes first. An Err here
         // writes nothing. A match so the next step's checks are one more arm.
@@ -816,7 +819,7 @@ fn approve(a: &Args, via: Via) -> Result<Value> {
         Ok((json!(p.last_decision(&step)), p.posts.is_empty()))
     })?;
     if step == "upload" && unposted {
-        match upload::start(dir, false) {
+        match upload::start(dir, false, false) {
             Ok(job) => v["youtube_job"] = json!(job),
             Err(e) => v["not_posted"] = e.into(),
         }
@@ -827,16 +830,21 @@ fn approve(a: &Args, via: Via) -> Result<Value> {
 fn redo(a: &Args, via: Via) -> Result<Value> {
     let step = a.text("step");
     store::update_project(&a.project()?, |p| {
+        if step == "upload" {
+            upload::check_idle(p)?;
+        }
         p.redo(&step, &a.text("note"), via, Timestamp::now())?;
         Ok(json!(p.last_decision(&step)))
     })
 }
 
-fn job_start(a: &Args, _: Via) -> Result<Value> {
+fn job_start(a: &Args, via: Via) -> Result<Value> {
     let kind = a.text("kind");
     if kind == "youtube" {
         let dir = a.opt("project").ok_or("a youtube job needs its project")?;
-        return Ok(json!(upload::start(project_dir(&dir)?, a.flag("again"))?));
+        let again = a.flag("again");
+        let private = again && via == Via::Mcp;
+        return Ok(json!(upload::start(project_dir(&dir)?, again, private)?));
     }
     if kind != "tool" && kind != "mockingbird" {
         return Err(format!(

@@ -173,6 +173,12 @@ pub struct Post {
     /// The resumable session's address, while it's a claim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The file being sent, relative to the project, and its size, while
+    /// it's a claim: a later run resumes the session only for the same file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub video: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

@@ -30,7 +30,7 @@ use crate::jobs::{self, Job, JobState};
 use crate::niche::Visibility;
 use crate::project::{Kind, Output, Post, Project, Result, State, Step, Verdict, Via};
 use crate::sheet::{self, Sheet};
-use crate::store::{self, PROJECT_FILE};
+use crate::store::{self, Config, PROJECT_FILE};
 use crate::youtube;
 
 const STEP: &str = "upload";
@@ -45,7 +45,10 @@ const SESSION_LIFE: SignedDuration = SignedDuration::from_hours(7 * 24);
 /// What a post needs, checked when the job is queued and again when it runs.
 struct Plan {
     round: u32,
+    /// The film, relative to the project, then its full path and size.
+    file: String,
     video: PathBuf,
+    size: u64,
     sheet: Sheet,
     thumbnail: PathBuf,
     label: String,
@@ -112,9 +115,20 @@ fn check_unposted(p: &Project, again: bool) -> Result<()> {
     Ok(())
 }
 
+/// Refuses a change to the upload step while a job is sending it.
+pub fn check_idle(p: &Project) -> Result<()> {
+    match p.posts.iter().find(|c| live(c)) {
+        Some(c) => Err(format!(
+            "job {} is uploading this project now. Wait for it to finish, or cancel it, before changing the upload step",
+            c.job.as_deref().unwrap_or_default()
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The channel label a project posts to and the visibility it asks for.
-fn target(p: &Project) -> Result<(String, Visibility)> {
-    let config = store::read_config()?;
+/// `private` is a second post asked for through MCP.
+fn target(p: &Project, config: &Config, private: bool) -> Result<(String, Visibility)> {
     let niche = p
         .niche
         .as_ref()
@@ -133,7 +147,7 @@ fn target(p: &Project) -> Result<(String, Visibility)> {
         .last_decision(STEP)
         .is_some_and(|d| d.via == Via::Mcp && d.decision == Verdict::Approved && d.round == round);
     let visibility = match niche {
-        Some(n) if !by_mcp => n.visibility,
+        Some(n) if !by_mcp && !private => n.visibility,
         _ => Visibility::Private,
     };
     Ok((label, visibility))
@@ -143,20 +157,29 @@ fn not_signed_in(label: &str) -> String {
     format!("{label} isn't signed in. Sign in with youtube_connect")
 }
 
-fn plan(dir: &Path, again: bool) -> Result<Plan> {
+fn plan(dir: &Path, again: bool, private: bool) -> Result<Plan> {
     let p: Project = store::read(&dir.join(PROJECT_FILE))?;
     check_unposted(&p, again)?;
     let step = approved(&p, STEP)?;
     let video = the_only(step, Kind::Video, "video")?;
     let thumbnail = the_only(approved(&p, "thumbnail")?, Kind::Image, "image")?;
     let (sheet, _) = sheet::submitted(dir, approved(&p, "description")?.round)?;
-    let (label, visibility) = target(&p)?;
+    let (label, visibility) = target(&p, &store::read_config()?, private)?;
     if !youtube::signed_in(&label)? {
         return Err(not_signed_in(&label));
     }
+    let path = dir.join(&video.path);
+    let size = fs::metadata(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .len();
+    if size == 0 {
+        return Err(format!("{} is empty", path.display()));
+    }
     Ok(Plan {
         round: step.round,
-        video: dir.join(&video.path),
+        file: video.path,
+        video: path,
+        size,
         sheet,
         thumbnail: dir.join(&thumbnail.path),
         label,
@@ -166,19 +189,26 @@ fn plan(dir: &Path, again: bool) -> Result<Plan> {
 
 /// The upload step's part of `status`: the posts, where the next one goes
 /// and as what, and why an approved step has nothing posting.
+/// It reads config.toml, not the Keychain: a channel listed there is one
+/// youtube_connect signed in and youtube_disconnect hasn't taken out.
 pub fn status(p: &Project, jobs: &[Job]) -> Value {
-    let mut v = json!({"posts": p.posts});
-    let error = match target(p) {
-        Ok((label, visibility)) => {
+    let posts: Vec<Value> = p
+        .posts
+        .iter()
+        .map(|post| {
+            let mut v = json!(post);
+            v["live"] = live(post).into();
+            v
+        })
+        .collect();
+    let mut v = json!({"posts": posts});
+    let error = match store::read_config().and_then(|c| Ok((target(p, &c, false)?, c))) {
+        Ok(((label, visibility), config)) => {
+            let signed_in = config.channel.iter().any(|c| c.label == label);
             v["visibility"] = json!(visibility);
-            let signed_in = youtube::signed_in(&label);
-            v["signed_in"] = json!(signed_in.as_ref().is_ok_and(|s| *s));
-            v["channel"] = label.clone().into();
-            match signed_in {
-                Ok(true) => None,
-                Ok(false) => Some(not_signed_in(&label)),
-                Err(e) => Some(e),
-            }
+            v["signed_in"] = signed_in.into();
+            v["channel"] = label.as_str().into();
+            (!signed_in).then(|| not_signed_in(&label))
         }
         Err(e) => Some(e),
     };
@@ -215,8 +245,9 @@ pub fn status(p: &Project, jobs: &[Job]) -> Value {
 
 /// Queues a `youtube` job for the project in `dir`, which is canonical.
 /// `again` posts a project that's already posted; only a person asks for it.
-pub fn start(dir: PathBuf, again: bool) -> Result<Job> {
-    plan(&dir, again)?;
+/// `private` asks for private whatever the niche says.
+pub fn start(dir: PathBuf, again: bool, private: bool) -> Result<Job> {
+    plan(&dir, again, private)?;
     let busy = jobs::list(Some(&dir))
         .into_iter()
         .any(|j| j.kind == "youtube" && matches!(j.state, JobState::Queued | JobState::Running));
@@ -232,6 +263,9 @@ pub fn start(dir: PathBuf, again: bool) -> Result<Job> {
     if again {
         command.push("--again".into());
     }
+    if private {
+        command.push("--private".into());
+    }
     jobs::queue(
         "youtube",
         "upload",
@@ -243,17 +277,18 @@ pub fn start(dir: PathBuf, again: bool) -> Result<Job> {
     )
 }
 
-/// `mockingbird-studio youtube-upload <project> [--again]`.
+/// `mockingbird-studio youtube-upload <project> [--again] [--private]`.
 pub fn run(args: &[String]) -> ExitCode {
-    let (dir, again) = match args {
-        [dir] => (dir, false),
-        [dir, a] if a == "--again" => (dir, true),
-        _ => {
-            eprintln!("usage: mockingbird-studio youtube-upload <project> [--again]");
-            return ExitCode::from(2);
-        }
+    let flags = args.get(1..).unwrap_or_default();
+    let (Some(dir), true) = (
+        args.first(),
+        flags.iter().all(|f| f == "--again" || f == "--private"),
+    ) else {
+        eprintln!("usage: mockingbird-studio youtube-upload <project> [--again] [--private]");
+        return ExitCode::from(2);
     };
-    match upload(Path::new(dir), again) {
+    let has = |f: &str| flags.iter().any(|a| a == f);
+    match upload(Path::new(dir), has("--again"), has("--private")) {
         Ok(lines) => {
             println!("{lines}");
             ExitCode::SUCCESS
@@ -269,34 +304,85 @@ fn name(v: Visibility) -> String {
     json!(v).as_str().unwrap_or_default().to_string()
 }
 
+/// What a run does about a dead job's claim.
+enum Prior {
+    /// Nothing to ask about: open a new session.
+    Fresh,
+    /// The same file for the same round: carry on in its session.
+    Resume(String),
+    /// Another file or round was being sent: ask that session once whether
+    /// it finished, with the size it was sending and the visibility it asked.
+    Ask(String, Option<u64>, Visibility),
+}
+
+fn fresh(plan: &Plan, job: &Option<String>) -> Post {
+    Post {
+        step: STEP.into(),
+        round: plan.round,
+        at: Timestamp::now(),
+        job: job.clone(),
+        state: Some(UPLOADING.into()),
+        session: None,
+        file: Some(plan.file.clone()),
+        size: Some(plan.size),
+        video: String::new(),
+        url: String::new(),
+        channel: plan.label.clone(),
+        visibility_asked: plan.visibility,
+        visibility_set: String::new(),
+        thumbnail: None,
+        rest: Default::default(),
+    }
+}
+
 /// Claims the post under the project's lock. A dead job's claim is taken
-/// over, and its session, if it had one, is returned to be asked about.
-fn claim(dir: &Path, plan: &Plan, job: &Option<String>, again: bool) -> Result<Option<String>> {
+/// over; its session is resumed only for the same round and file.
+fn claim(dir: &Path, plan: &Plan, job: &Option<String>, again: bool) -> Result<Prior> {
     store::update_project(dir, |p| {
         check_unposted(p, again)?;
-        let now = Timestamp::now();
-        if let Some(c) = p.posts.iter_mut().find(|c| c.state.is_some()) {
-            c.job = job.clone();
-            c.at = now;
-            return Ok(c.session.clone());
-        }
-        p.posts.push(Post {
-            step: STEP.into(),
-            round: plan.round,
-            at: now,
-            job: job.clone(),
-            state: Some(UPLOADING.into()),
-            session: None,
-            video: String::new(),
-            url: String::new(),
-            channel: plan.label.clone(),
-            visibility_asked: plan.visibility,
-            visibility_set: String::new(),
-            thumbnail: None,
-            rest: Default::default(),
-        });
-        Ok(None)
+        let Some(i) = p.posts.iter().position(|c| c.state.is_some()) else {
+            p.posts.push(fresh(plan, job));
+            return Ok(Prior::Fresh);
+        };
+        let c = &mut p.posts[i];
+        let same = c.round == plan.round
+            && c.size == Some(plan.size)
+            && c.file.as_deref() == Some(plan.file.as_str());
+        // The token goes only to YouTube's host, whatever project.toml says.
+        let ours = |s: &String| s.starts_with(&format!("{}/", youtube::api()));
+        Ok(match c.session.clone().filter(ours) {
+            Some(s) if same => {
+                c.job = job.clone();
+                c.at = Timestamp::now();
+                Prior::Resume(s)
+            }
+            Some(s) => {
+                c.job = job.clone();
+                c.at = Timestamp::now();
+                Prior::Ask(s, c.size, c.visibility_asked)
+            }
+            None => {
+                *c = fresh(plan, job);
+                Prior::Fresh
+            }
+        })
     })
+}
+
+/// One question to an earlier session: did its upload finish? Returns the
+/// video Google made if it did.
+fn ask(agent: &ureq::Agent, auth: &str, session: &str, size: Option<u64>) -> Option<Value> {
+    let total = size.map_or("*".to_string(), |s| s.to_string());
+    let r = agent
+        .put(session)
+        .header("Authorization", auth)
+        .header("Content-Range", format!("bytes */{total}"))
+        .send(&[][..])
+        .ok()?;
+    match read_reply(r) {
+        (200 | 201, _, body) => serde_json::from_str(&body).ok(),
+        _ => None,
+    }
 }
 
 fn with_claim(dir: &Path, f: impl FnOnce(&mut Post)) -> Result<()> {
@@ -311,14 +397,9 @@ fn with_claim(dir: &Path, f: impl FnOnce(&mut Post)) -> Result<()> {
     })
 }
 
-fn upload(dir: &Path, again: bool) -> Result<String> {
-    let plan = plan(dir, again)?;
-    let size = fs::metadata(&plan.video)
-        .map_err(|e| format!("{}: {e}", plan.video.display()))?
-        .len();
-    if size == 0 {
-        return Err(format!("{} is empty", plan.video.display()));
-    }
+fn upload(dir: &Path, again: bool, private: bool) -> Result<String> {
+    let plan = plan(dir, again, private)?;
+    let size = plan.size;
     let token = youtube::access_token(&plan.label)?;
     let auth = format!("Bearer {token}");
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -331,27 +412,48 @@ fn upload(dir: &Path, again: bool) -> Result<String> {
         .build()
         .into();
     let job = std::env::var("MOCKINGBIRD_STUDIO_JOB").ok();
-    let mut session = claim(dir, &plan, &job, again)?;
-    let mut resuming = session.is_some();
-    if resuming {
-        eprintln!("an earlier job left this upload unfinished; asking YouTube how far it got");
+    let mut asked = plan.visibility;
+    let (mut session, mut found) = (None, None);
+    match claim(dir, &plan, &job, again)? {
+        Prior::Fresh => {}
+        Prior::Resume(s) => {
+            eprintln!("an earlier job left this upload unfinished; asking YouTube how far it got");
+            session = Some(s);
+        }
+        Prior::Ask(s, old, visibility) => {
+            eprintln!(
+                "an earlier job was sending another round; asking YouTube whether that upload finished"
+            );
+            found = ask(&agent, &auth, &s, old);
+            if found.is_some() {
+                eprintln!("it did, so that video is the post and nothing more is sent");
+                asked = visibility;
+            } else {
+                with_claim(dir, |c| *c = fresh(&plan, &job))?;
+            }
+        }
     }
-    let video = loop {
-        let at = match session.take() {
-            Some(s) => s,
-            None => {
-                let s = open(&agent, &auth, &plan, size)?;
-                with_claim(dir, |c| c.session = Some(s.clone()))?;
-                s
+    let mut resuming = session.is_some();
+    let video = if let Some(v) = found {
+        v
+    } else {
+        loop {
+            let at = match session.take() {
+                Some(s) => s,
+                None => {
+                    let s = open(&agent, &auth, &plan, size)?;
+                    with_claim(dir, |c| c.session = Some(s.clone()))?;
+                    s
+                }
+            };
+            match send(&agent, &auth, &at, &plan.video, size, resuming)? {
+                Some(v) => break v,
+                None if resuming => {
+                    eprintln!("the earlier upload session is gone; starting over");
+                    resuming = false;
+                }
+                None => return Err("YouTube dropped the upload session. Run the job again".into()),
             }
-        };
-        match send(&agent, &auth, &at, &plan.video, size, resuming)? {
-            Some(v) => break v,
-            None if resuming => {
-                eprintln!("the earlier upload session is gone; starting over");
-                resuming = false;
-            }
-            None => return Err("YouTube dropped the upload session. Run the job again".into()),
         }
     };
 
@@ -373,6 +475,8 @@ fn upload(dir: &Path, again: bool) -> Result<String> {
         c.job = job.clone();
         c.state = None;
         c.session = None;
+        c.file = None;
+        c.size = None;
         c.video = id.clone();
         c.url = url.clone();
         c.visibility_set = set.clone();
@@ -383,10 +487,10 @@ fn upload(dir: &Path, again: bool) -> Result<String> {
         )
     })?;
     let mut lines = vec![format!("Posted {url} to {} as {set}.", plan.label)];
-    if set != name(plan.visibility) {
+    if set != name(asked) {
         lines.push(format!(
             "Google set it to {set}, not {}. YouTube locks videos from an API project that hasn't passed its audit to private.",
-            name(plan.visibility)
+            name(asked)
         ));
     }
     remember_channel(&plan.label, &video);
