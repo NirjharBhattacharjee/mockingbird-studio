@@ -376,7 +376,7 @@ pub(crate) fn topics(a: &Args) -> Result<Value> {
 }
 
 /// `[scan] command`: the shortlist command's words. Empty for none.
-fn command(c: &store::Config) -> Result<Vec<String>> {
+pub(crate) fn command(c: &store::Config) -> Result<Vec<String>> {
     let Some(v) = c.rest.get("scan").and_then(|s| s.get("command")) else {
         return Ok(vec![]);
     };

@@ -573,7 +573,7 @@ async function scanTime(args = {}) {
     const s = await op("scan_time", args);
     $("scan-time").value = s.time ?? "";
     $("scan-status").textContent = !s.time ? "No schedule."
-      : s.installed ? `The scan runs at ${s.time} each day. Its log is ${s.log}.`
+      : s.installed ? `The scan runs at ${s.time} each day${s.set_by === "mcp" ? " (set by your agent)" : ""}. Its log is ${s.log}.`
       : `The time is ${s.time}, but its launchd agent is missing. Save the time again.`;
     if (s.warning) $("scan-error").textContent = s.warning;
   } catch (e) {

@@ -14,19 +14,31 @@ fn setting_and_clearing_the_time_writes_and_removes_the_agent() {
     let _ = fs::remove_dir_all(&root);
     let (home, agents) = (root.join("home"), root.join("LaunchAgents"));
     fs::create_dir_all(&root).unwrap();
-    // Logs its arguments, and fails a bootstrap while `refuse` exists.
+    // Logs its arguments. A bootout exits with the code in `bootout-code`,
+    // and a bootstrap fails while `refuse` exists.
     let fake = root.join("launchctl");
     let calls = root.join("calls");
+    let (code, refuse) = (root.join("bootout-code"), root.join("refuse"));
     fs::write(
         &fake,
         format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$1\" != bootstrap ] || [ ! -e '{}' ] || {{ echo nope >&2; exit 5; }}\n",
+            "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$1\" in\n\
+             bootout) [ -e '{c}' ] && {{ echo gone >&2; exit $(cat '{c}'); }} ;;\n\
+             bootstrap) [ -e '{r}' ] && {{ echo nope >&2; exit 5; }} ;;\nesac\nexit 0\n",
             calls.display(),
-            root.join("refuse").display()
+            c = code.display(),
+            r = refuse.display()
         ),
     )
     .unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    // A shortlist command the schedule's PATH won't have.
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+        home.join("config.toml"),
+        "[scan]\ncommand = [\"no-such-shortlister\", \"-p\"]\n",
+    )
+    .unwrap();
     let run = |args: &[&str]| -> Output {
         Command::new(BIN)
             .args(args)
@@ -46,6 +58,20 @@ fn setting_and_clearing_the_time_writes_and_removes_the_agent() {
     let config = || fs::read_to_string(home.join("config.toml")).unwrap_or_default();
     let calls_text = || fs::read_to_string(&calls).unwrap_or_default();
 
+    // One stand-in without the other is refused, before anything runs.
+    let out = Command::new(BIN)
+        .args(["scan-time", "--time", "07:00"])
+        .env("MOCKINGBIRD_STUDIO_HOME", &home)
+        .env("MOCKINGBIRD_STUDIO_LAUNCH_AGENTS", &agents)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("or neither"),
+        "{out:?}"
+    );
+    assert!(!plist.exists() && calls_text().is_empty());
+
     assert!(ok(&["scan-time"]).contains(r#""installed":false"#));
     assert!(ok(&["scan-time"]).contains(r#""time":null"#));
 
@@ -63,7 +89,13 @@ fn setting_and_clearing_the_time_writes_and_removes_the_agent() {
         out.contains("/Applications/mockingbird-studio.app"),
         "{out}"
     );
+    assert!(
+        out.contains("no-such-shortlister isn't on the PATH the schedule will use"),
+        "{out}"
+    );
+    assert!(out.contains(r#""set_by":"cli""#), "{out}");
     assert!(config().contains("time = \"07:05\""), "{}", config());
+    assert!(config().contains("via = \"cli\""), "{}", config());
     let p = fs::read_to_string(&plist).unwrap();
     assert!(
         p.contains(&format!(
@@ -98,27 +130,40 @@ fn setting_and_clearing_the_time_writes_and_removes_the_agent() {
         "{c}"
     );
 
-    // launchd refuses a new time: no agent file is left, the old time stays.
-    fs::write(root.join("refuse"), "").unwrap();
+    // launchd refuses a new time five times: the old agent is gone, so the
+    // schedule is off, and the reply says so.
+    fs::remove_file(&calls).unwrap();
+    fs::write(&refuse, "").unwrap();
     let out = run(&["scan-time", "--time", "08:00"]);
     assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("nope"),
+        err.contains("nope") && err.contains("The schedule is now off"),
+        "{err}"
+    );
+    assert_eq!(calls_text().matches("bootstrap ").count(), 5);
+    assert!(!plist.exists());
+    assert!(!config().contains("time"), "{}", config());
+    fs::remove_file(&refuse).unwrap();
+
+    // Clearing unloads the agent, deletes its file and the time. Not loaded
+    // (3) is fine; any other bootout failure is reported and keeps the file.
+    ok(&["scan-time", "--time", "08:00"]);
+    fs::write(&code, "5").unwrap();
+    let out = run(&["scan-time", "--time", ""]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("gone"),
         "{out:?}"
     );
-    assert!(!plist.exists());
-    assert!(config().contains("time = \"07:05\""));
-    fs::remove_file(root.join("refuse")).unwrap();
-
-    // Clearing unloads the agent, deletes its file and the time.
-    fs::remove_file(&calls).unwrap();
-    ok(&["scan-time", "--time", "08:00"]);
+    assert!(plist.exists());
+    fs::write(&code, "3").unwrap();
     let out = ok(&["scan-time", "--time", ""]);
     assert!(
         out.contains(r#""time":null"#) && out.contains(r#""installed":false"#),
         "{out}"
     );
     assert!(!plist.exists());
-    assert!(!config().contains("time ="), "{}", config());
+    assert!(!config().contains("time"), "{}", config());
     assert!(calls_text().lines().last().unwrap().starts_with("bootout "));
 }
