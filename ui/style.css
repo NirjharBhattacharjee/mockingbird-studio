@@ -78,6 +78,55 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 #preview .diff .add { background: rgb(52 199 89 / 0.18); }
 #preview .diff .del { background: rgb(255 59 48 / 0.15); text-decoration: line-through; }
 
+#preview.proxied { flex-direction: column; }
+#preview .proxy-label { margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+
+#timeline { display: flex; gap: 3px; height: 40px; flex: none; }
+#timeline[hidden] { display: none; }
+.clip {
+  position: relative;
+  min-width: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  cursor: pointer;
+  overflow: hidden;
+}
+.clip.current { border-color: var(--accent); }
+.segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 2px solid var(--soft);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+#timeline .segment button {
+  pointer-events: auto;
+  display: block;
+  max-width: 100%;
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#timeline .segment button:hover { color: inherit; }
+#timeline .pin {
+  position: absolute;
+  bottom: 2px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid Canvas;
+  background: var(--accent);
+}
+
 #files { display: flex; flex-wrap: wrap; gap: 6px; }
 #files button[aria-pressed="true"] { border-color: var(--accent); }
 
