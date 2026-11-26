@@ -327,13 +327,13 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "scan",
-        help: "Fetch the feeds of one niche, or of every niche, and write today's scan: the entries from the last window_hours that earlier scans haven't listed. Fetches the feed addresses only, never the pages they link to.",
+        help: "Fetch the feeds of one niche, or of every niche, and write today's scan: the entries from the last window_hours that earlier scans haven't listed. Fetches the feed addresses only, never the pages they link to. From the command line it also runs [scan] command to shortlist the items. Over MCP and from the window it doesn't: rank the items yourself and save your shortlist with topics_set.",
         args: &[opt(
             "niche",
             Text,
             "The niche's id, or its name. Every niche if left out.",
         )],
-        run: |a, _| scan::scan(a),
+        run: |a, via| scan::scan(a, via),
     },
     Op {
         name: "topics",
@@ -546,8 +546,20 @@ pub(crate) fn new_project(
     niche: Option<String>,
     workflow: Option<String>,
 ) -> Result<PathBuf> {
+    let shown = dir.display();
+    // Nothing here expands ~ or $HOME: they'd make a folder named "~".
+    if dir.to_string_lossy().starts_with(['~', '$']) {
+        return Err(format!(
+            "{shown}: write the folder's full path; ~ and $ aren't expanded here"
+        ));
+    }
     if dir.join(PROJECT_FILE).exists() {
-        return Err(format!("{} is already a project", dir.display()));
+        return Err(format!("{shown} is already a project"));
+    }
+    if dir.read_dir().is_ok_and(|mut d| d.next().is_some()) {
+        return Err(format!(
+            "{shown} already has files in it; pick a new or empty folder, or use project_add"
+        ));
     }
     let workflow = workflow.unwrap_or_else(|| "explainer".into());
     let project = Project::new(title, niche, &workflow, Timestamp::now())?;
@@ -994,15 +1006,50 @@ mod tests {
             json!({"niche": "pick-test", "day": "2026-11-25", "topics": [{"title": "Third"}]}),
         )
         .unwrap();
-        let t = r["topics"].as_array().unwrap();
-        assert_eq!(t.len(), 2);
+        let list = r["topics"].as_array().unwrap();
+        assert_eq!(list.len(), 2);
         assert_eq!(
-            (t[0]["id"].as_str(), t[0]["project"].as_str()),
+            (list[0]["id"].as_str(), list[0]["project"].as_str()),
             (Some("1"), dir.to_str())
         );
-        assert_eq!(t[1]["id"], "2");
+        assert_eq!(list[1]["id"], "2");
         let back: scan::Scan = store::read_json(&file).unwrap();
         assert_eq!(back.topics.len(), 2);
+
+        // The project is made before the topic is linked, and a failed link says so.
+        let scans = file.parent().unwrap();
+        let ro = |mode| {
+            fs::set_permissions(scans, std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap()
+        };
+        ro(0o555);
+        let third = t.path().join("third");
+        let e = run(
+            "topic_pick",
+            json!({"niche": "pick-test", "topic": "2", "dir": third}),
+        );
+        ro(0o755);
+        let e = e.unwrap_err();
+        assert!(
+            e.contains("made the project") && e.contains("couldn't mark topic 2"),
+            "{e}"
+        );
+        assert!(third.join(PROJECT_FILE).is_file());
+    }
+
+    #[test]
+    fn project_new_refuses_home_shorthand_and_folders_with_files() {
+        let t = setup();
+        for dir in ["~/videos/x", "~", "$HOME/videos/x"] {
+            let e = run("project_new", json!({"dir": dir, "title": "T"})).unwrap_err();
+            assert!(e.contains("full path"), "{e}");
+            assert!(!Path::new(dir).exists());
+        }
+        fs::write(t.path().join("footage.mov"), "x").unwrap();
+        let e = run("project_new", json!({"dir": t.path(), "title": "T"})).unwrap_err();
+        assert!(e.contains("already has files"), "{e}");
+        let empty = t.path().join("empty");
+        fs::create_dir(&empty).unwrap();
+        run("project_new", json!({"dir": empty, "title": "T"})).unwrap();
     }
 
     #[test]

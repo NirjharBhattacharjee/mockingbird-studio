@@ -86,7 +86,7 @@ pub fn read_config() -> Result<Config> {
 }
 
 /// Runs `f` while holding the lock on `path`.
-fn locked<R>(path: &Path, f: impl FnOnce() -> Result<R>) -> Result<R> {
+pub(crate) fn locked<R>(path: &Path, f: impl FnOnce() -> Result<R>) -> Result<R> {
     let mut lock_path = path.as_os_str().to_owned();
     lock_path.push(".lock");
     let lock = File::create(&lock_path)

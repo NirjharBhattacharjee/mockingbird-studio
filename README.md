@@ -147,6 +147,33 @@ unset MOCKINGBIRD_STUDIO_HOME
 The same steps run headless in `cargo test --test loop`, with the MCP server
 as the agent.
 
+## The scan's shortlist command
+
+`mockingbird-studio scan` pulls each niche's feeds. Run from the command
+line, or by the morning schedule, it can also give the new items to a
+command you choose, which picks the topics. Set the command in
+`~/.mockingbird-studio/config.toml`:
+
+```toml
+[scan]
+command = ["claude", "-p", "--tools", "", "--strict-mcp-config"]
+```
+
+- The command runs exactly as written, with no shell.
+- On stdin it gets a fixed instruction, the niche's name, and the new items
+  as a JSON list of `{link, feed, title, published}`.
+- The items are text from other people's websites, so give the command no
+  tools. In the example, `--tools ""` turns off Claude Code's built-in tools
+  and `--strict-mcp-config` loads no MCP servers.
+- On stdout it prints a JSON list of up to 20 topics, best first:
+  `[{"title": "...", "why": "...", "items": ["<a link from the input>"]}]`.
+  Text around the list is ignored. If any topic cites a link that wasn't in
+  the input, or has a title over one line, the whole list is refused.
+- It has 10 minutes and 1 MB of output. If it fails, the scan keeps its
+  items and records why in `error`.
+- A scan over MCP or from the window doesn't run the command. The agent
+  ranks the items and saves them with `topics_set`.
+
 ## What it won't do
 
 - Render video. mockingbird does that.

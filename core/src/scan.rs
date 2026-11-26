@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::niche::{self, Niche};
 use crate::ops::{self, Args};
-use crate::project::Result;
+use crate::project::{Result, Via};
 use crate::store;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -250,7 +250,7 @@ fn scan_niche(
     }
     // Newest first; undated ones last.
     items.sort_by(|a, b| b.published.cmp(&a.published));
-    let scan = Scan {
+    let mut scan = Scan {
         niche: n.id.clone(),
         day: today,
         at: now,
@@ -260,9 +260,17 @@ fn scan_niche(
         shortlist_by: None,
         error: None,
     };
-    // ponytail: a second scan on the same day drops that day's shortlist
-    // (M4-2); keep it there if people rescan after ranking.
-    store::write_json(&scan_file(&dir, today), &scan)?;
+    let path = scan_file(&dir, today);
+    fs::create_dir_all(&dir).map_err(|e| format!("can't make {}: {e}", dir.display()))?;
+    store::locked(&path, || {
+        // A rescan today keeps the topics already picked from the earlier one.
+        // An earlier file that can't be read is replaced.
+        if let Ok(old) = read_scan(&path) {
+            scan.topics = old.topics;
+            replace_topics(&mut scan.topics, vec![]);
+        }
+        store::write_json(&path, &scan)
+    })?;
     Ok(scan)
 }
 
@@ -298,13 +306,18 @@ fn pick(c: &store::Config, key: Option<String>) -> Result<Vec<&Niche>> {
     }
 }
 
-pub(crate) fn scan(a: &Args) -> Result<Value> {
+pub(crate) fn scan(a: &Args, via: Via) -> Result<Value> {
     let c = store::read_config()?;
     let hours = window_hours(&c)?;
     let one = a.opt("niche");
     let named = one.is_some();
     let (mut scans, mut errors) = (vec![], vec![]);
-    let argv = command(&c)?;
+    // Only from the command line (and so the schedule). Over MCP or from
+    // the window, the agent ranks the items itself.
+    let argv = match via {
+        Via::Cli => command(&c)?,
+        Via::Mcp | Via::Window => vec![],
+    };
     for n in pick(&c, one)? {
         let got =
             scan_niche(&scans_root(), n, Timestamp::now(), hours, &fetch).and_then(|mut s| {
@@ -406,15 +419,14 @@ fn run_command(argv: &[String], input: Vec<u8>, timeout: Duration) -> Result<Vec
         match child.try_wait() {
             Ok(Some(s)) => break Some(s),
             Ok(None) if Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
-            _ => {
-                // SAFETY: kill takes plain integers. The command leads its
-                // own process group, so this reaches what it started.
-                unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
-                let _ = child.wait();
-                break None;
-            }
+            _ => break None,
         }
     };
+    // Finished or not, nothing it started may outlive it and hold the pipes
+    // open. SAFETY: kill takes plain integers. The command leads its own
+    // process group, so this reaches what it started.
+    unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+    let _ = child.wait();
     let (out, err) = (
         out.join().unwrap_or_default(),
         err.join().unwrap_or_default(),
@@ -435,9 +447,9 @@ fn run_command(argv: &[String], input: Vec<u8>, timeout: Duration) -> Result<Vec
     }
 }
 
-/// Checks a proposed shortlist against the scan's `items` and numbers it
-/// from `first`. One bad topic refuses the whole list.
-fn proposed(list: &[Value], items: &[Item], first: usize) -> Result<Vec<Topic>> {
+/// Checks a proposed shortlist against the scan's `items`. One bad topic
+/// refuses the whole list. `replace_topics` gives the ids.
+fn proposed(list: &[Value], items: &[Item]) -> Result<Vec<Topic>> {
     if list.len() > MAX_TOPICS {
         return Err(format!("{} topics; {MAX_TOPICS} at most", list.len()));
     }
@@ -474,7 +486,7 @@ fn proposed(list: &[Value], items: &[Item], first: usize) -> Result<Vec<Topic>> 
                 _ => return Err(format!("topic {n}: items should be a list of links")),
             };
             Ok(Topic {
-                id: (first + i).to_string(),
+                id: String::new(),
                 title,
                 why: text("why", MAX_WHY)?,
                 items: links,
@@ -496,7 +508,23 @@ fn parse_topics(out: &[u8], items: &[Item]) -> Result<Vec<Topic>> {
         .ok_or("the command's output has no JSON list")?;
     let v: Vec<Value> = serde_json::from_str(list)
         .map_err(|e| format!("the command's output isn't a JSON list of topics: {e}"))?;
-    proposed(&v, items, 1)
+    proposed(&v, items)
+}
+
+/// Replaces the shortlist with `new`, keeping the topics already picked, so
+/// a project never loses the topic it came from. The new ones are numbered
+/// after them.
+fn replace_topics(topics: &mut Vec<Topic>, new: Vec<Topic>) {
+    topics.retain(|t| t.project.is_some());
+    let last = topics
+        .iter()
+        .filter_map(|t| t.id.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
+    topics.extend(new.into_iter().enumerate().map(|(i, t)| Topic {
+        id: (last + i + 1).to_string(),
+        ..t
+    }));
 }
 
 /// Runs the shortlist command on a fresh scan's items and saves the
@@ -517,20 +545,21 @@ fn shortlist(
         n.name,
         serde_json::to_string_pretty(&s.items).map_err(|e| e.to_string())?
     );
-    match run_command(argv, input.into_bytes(), timeout).and_then(|o| parse_topics(&o, &s.items)) {
-        Ok(t) => {
-            s.topics = t;
-            s.shortlist_by = Some("command".into());
-        }
-        Err(e) => s.error = Some(e),
-    }
+    let got =
+        run_command(argv, input.into_bytes(), timeout).and_then(|o| parse_topics(&o, &s.items));
     let path = scan_file(&niche_dir(root, &s.niche)?, s.day);
-    store::update_json(&path, |f: &mut Scan| {
-        f.topics = s.topics.clone();
-        f.shortlist_by = s.shortlist_by.clone();
-        f.error = s.error.clone();
-        Ok(())
-    })
+    *s = store::update_json(&path, |f: &mut Scan| {
+        match got {
+            Ok(t) => {
+                replace_topics(&mut f.topics, t);
+                f.shortlist_by = Some("command".into());
+                f.error = None;
+            }
+            Err(e) => f.error = Some(e),
+        }
+        Ok(f.clone())
+    })?;
+    Ok(())
 }
 
 /// The niche the arguments name and the path of its scan file.
@@ -546,16 +575,8 @@ fn named_scan(root: &Path, a: &Args) -> Result<(Niche, PathBuf)> {
 pub(crate) fn topics_set(a: &Args) -> Result<Value> {
     let (_, path) = named_scan(&scans_root(), a)?;
     store::update_json(&path, |s: &mut Scan| {
-        // Picked topics stay, so a project never loses the topic it came from.
-        let kept: Vec<Topic> = s.topics.drain(..).filter(|t| t.project.is_some()).collect();
-        let next = kept
-            .iter()
-            .filter_map(|t| t.id.parse::<usize>().ok())
-            .max()
-            .unwrap_or(0)
-            + 1;
-        let new = proposed(a.objects("topics"), &s.items, next)?;
-        s.topics = kept.into_iter().chain(new).collect();
+        let new = proposed(a.objects("topics"), &s.items)?;
+        replace_topics(&mut s.topics, new);
         s.shortlist_by = Some("agent".into());
         s.error = None;
         Ok(json!(s))
@@ -566,24 +587,38 @@ pub(crate) fn topic_pick(a: &Args) -> Result<Value> {
     let (n, path) = named_scan(&scans_root(), a)?;
     let id = a.text("topic");
     let id = id.trim();
-    let (dir, topic) = store::update_json(&path, |s: &mut Scan| {
-        let day = s.day;
+    let s = read_scan(&path)?;
+    let t = s
+        .topics
+        .iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| format!("no topic {id:?} on the shortlist of {} for {}", n.id, s.day))?;
+    if let Some(p) = &t.project {
+        return Err(format!("topic {id} is already the project {}", p.display()));
+    }
+    // The project is made first and linked after, so a topic never points
+    // at a project that doesn't exist.
+    let dir = ops::new_project(
+        Path::new(&a.text("dir")),
+        &t.title,
+        Some(n.id.clone()),
+        n.workflow.clone(),
+    )?;
+    let title = &t.title;
+    let topic = store::update_json(&path, |s: &mut Scan| {
         let t = s
             .topics
             .iter_mut()
-            .find(|t| t.id == id)
-            .ok_or_else(|| format!("no topic {id:?} on the shortlist of {} for {day}", n.id))?;
-        if let Some(p) = &t.project {
-            return Err(format!("topic {id} is already the project {}", p.display()));
-        }
-        let dir = ops::new_project(
-            Path::new(&a.text("dir")),
-            &t.title,
-            Some(n.id.clone()),
-            n.workflow.clone(),
-        )?;
+            .find(|t| t.id == id && t.title == *title && t.project.is_none())
+            .ok_or("the shortlist changed while the project was being made")?;
         t.project = Some(dir.clone());
-        Ok((dir, t.clone()))
+        Ok(t.clone())
+    })
+    .map_err(|e| {
+        format!(
+            "made the project {}, but couldn't mark topic {id} as picked: {e}",
+            dir.display()
+        )
     })?;
     let mut v = ops::status_of(&dir)?;
     v["topic"] = json!(topic);
@@ -846,6 +881,70 @@ mod tests {
     }
 
     #[test]
+    fn a_rescan_keeps_the_picked_topics() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let (n, mut s) = scanned(root.path());
+        let two = r#"echo '[{"title": "A"}, {"title": "B"}]'"#;
+        shortlist(
+            root.path(),
+            &n,
+            &mut s,
+            &fake(bin.path(), two),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let path = scan_file(&root.path().join("ai-news"), s.day);
+        store::update_json(&path, |f: &mut Scan| {
+            f.topics[1].project = Some("/videos/b".into());
+            Ok(())
+        })
+        .unwrap();
+        let mut again = scan_niche(root.path(), &n, at(NOW), 48, &from_files).unwrap();
+        assert_eq!(again.topics.len(), 1);
+        assert_eq!(
+            (again.topics[0].id.as_str(), again.topics[0].title.as_str()),
+            ("2", "B")
+        );
+        // The command's new shortlist goes after it.
+        shortlist(
+            root.path(),
+            &n,
+            &mut again,
+            &fake(bin.path(), two),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let ids: Vec<_> = on_disk(root.path(), &again)
+            .topics
+            .iter()
+            .map(|t| (t.id.clone(), t.project.is_some()))
+            .collect();
+        assert_eq!(
+            ids,
+            [("2".into(), true), ("3".into(), false), ("4".into(), false)]
+        );
+        assert_eq!(again.topics.len(), 3);
+    }
+
+    #[test]
+    fn what_the_command_started_is_stopped_when_it_exits() {
+        let bin = tempfile::tempdir().unwrap();
+        // The background sleep holds stdout open after the script is done.
+        let argv = fake(bin.path(), "sleep 30 &\necho '[]'");
+        let began = Instant::now();
+        assert_eq!(
+            run_command(&argv, vec![], Duration::from_secs(20)).unwrap(),
+            b"[]\n"
+        );
+        assert!(
+            began.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            began.elapsed()
+        );
+    }
+
+    #[test]
     fn command_output_is_capped() {
         let bin = tempfile::tempdir().unwrap();
         let argv = fake(bin.path(), "head -c 2000000 /dev/zero");
@@ -864,10 +963,9 @@ mod tests {
         let ok = proposed(
             &[json!({"title": "T", "items": ["https://a.example/1"]})],
             &items,
-            4,
         )
         .unwrap();
-        assert_eq!(ok[0].id, "4");
+        assert_eq!(ok[0].items, ["https://a.example/1"]);
         let too_many = vec![json!({"title": "T"}); MAX_TOPICS + 1];
         let long = "x".repeat(MAX_TITLE + 1);
         for bad in [
@@ -878,7 +976,7 @@ mod tests {
             vec![json!({"title": "T", "items": [7]})],
             vec![json!({"title": "  "})],
         ] {
-            assert!(proposed(&bad, &items, 1).is_err(), "{bad:?}");
+            assert!(proposed(&bad, &items).is_err(), "{bad:?}");
         }
     }
 
