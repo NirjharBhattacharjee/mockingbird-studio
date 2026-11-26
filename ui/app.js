@@ -138,14 +138,39 @@ function drawStep() {
       pinned = null;
       draw();
     };
-    files.append(b);
+    if (s.id !== "shorts") {
+      files.append(b);
+      continue;
+    }
+    files.append(shortRow(s, o, b));
   }
   drawPreview(s?.output?.find((o) => o.path === sel.file), s?.round);
   drawTimeline(s);
   drawUpload(s);
 }
 
-// The upload step: what goes up and where, then what Google did with it.
+// A short with its keep or drop, and the buttons to decide while in review.
+function shortRow(s, o, b) {
+  const row = el("span", null, { class: "short" });
+  const d = o.decision;
+  const said = d ? `${d.decision === "keep" ? "kept" : "dropped"} via ${d.via}${d.note ? `: ${d.note}` : ""}` : "undecided";
+  row.append(b, el("span", said, { class: `said ${d?.decision ?? "none"}`, title: d ? new Date(d.at).toLocaleString() : "" }));
+  if (s.state !== "review" || !status.steps.some((t) => t.id === "film")) return row;
+  for (const [decision, label] of [["keep", "Keep"], ["drop", "Drop"]]) {
+    const btn = el("button", label, { type: "button", "aria-label": `${label} ${o.path}`, "aria-pressed": String(d?.decision === decision) });
+    btn.onclick = async () => {
+      try {
+        await op("short_decide", { project: sel.project, path: o.path, decision });
+        await refresh();
+      } catch (e) {
+        showError(e);
+      }
+    };
+    row.append(btn);
+  }
+  return row;
+}
+
 // For a claim left by a session that has gone.
 $("unclaim").onclick = async () => {
   try {
@@ -156,6 +181,7 @@ $("unclaim").onclick = async () => {
   }
 };
 
+// The upload step: what goes up and where, then what Google did with it.
 function drawUpload(s) {
   const u = s?.id === "upload" ? status?.upload : null;
   const box = $("upload");
