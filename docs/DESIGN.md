@@ -752,7 +752,8 @@ feeds = ["https://example.com/feed.xml"]
   so two panes don't take the same step. `status` leaves claimed steps out
   of `ready`, `submit` drops the claim, and `unclaim` lets go of one left
   by a session that has gone. The window shows each step as ready or
-  claimed by whom.
+  claimed by whom. A claim is advisory: it doesn't stop another agent's
+  `submit` or `job_start`. A step claim is not the upload's post claim.
 - A project made with `short` is one short, and posts through its own
   upload step like any project. Shorts cut inside a film's project get a
   decision each, and then a post each, with their own title and description.

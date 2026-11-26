@@ -138,7 +138,7 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "claim",
-        help: "Claim a step you're about to work on, so another agent picks a different one. Refused under the same rule as submit, or when someone else holds it. Submit lets go of it.",
+        help: "Claim a step you're about to work on, so another agent picks a different one. Refused under the same rule as submit, or when someone else holds it. Advisory: doesn't stop submit or job_start by others; submit clears it.",
         args: &[
             PROJECT,
             STEP,
@@ -815,10 +815,15 @@ fn add_segments(dir: &Path, outputs: &mut [Output], json: &str) -> Result<()> {
     Ok(())
 }
 
-fn claim(a: &Args, _: Via) -> Result<Value> {
+fn claim(a: &Args, via: Via) -> Result<Value> {
     let step = a.text("step");
     store::update_project(&a.project()?, |p| {
-        Ok(json!(p.claim(&step, &a.text("by"), Timestamp::now())?))
+        Ok(json!(p.claim(
+            &step,
+            &a.text("by"),
+            via,
+            Timestamp::now()
+        )?))
     })
 }
 

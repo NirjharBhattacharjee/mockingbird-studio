@@ -62,6 +62,7 @@ pub struct Claim {
     pub by: String,
     #[serde(deserialize_with = "time")]
     pub at: Timestamp,
+    pub via: Via,
     /// Keys this version doesn't know, kept so a write never drops them.
     #[serde(flatten)]
     pub rest: toml::Table,
@@ -324,10 +325,13 @@ impl Project {
     /// Marks step `id` as taken by `by`, so a second agent picks another.
     /// Refused under the submit rule, or when someone else holds it.
     /// Claiming again under the same name renews the time.
-    pub fn claim(&mut self, id: &str, by: &str, now: Timestamp) -> Result<&Claim> {
+    pub fn claim(&mut self, id: &str, by: &str, via: Via, now: Timestamp) -> Result<&Claim> {
         let by = by.trim();
         if by.is_empty() {
             return Err("a claim needs a name, such as the pane or session".into());
+        }
+        if by.chars().count() > 100 || by.chars().any(char::is_control) {
+            return Err("a claim's name is one line of at most 100 characters".into());
         }
         self.check_submit(id)?;
         let step = self.step_mut(id)?;
@@ -340,6 +344,7 @@ impl Project {
         Ok(step.claim.insert(Claim {
             by: by.to_string(),
             at: now,
+            via,
             rest: Default::default(),
         }))
     }
@@ -434,6 +439,7 @@ impl Project {
         for s in self.steps.iter_mut() {
             if later[1..].contains(&s.id) && !matches!(s.state, State::Todo | State::Redo) {
                 s.state = State::Redo;
+                s.claim = None;
                 self.decisions.push(Decision {
                     step: s.id.clone(),
                     round: s.round,
@@ -749,22 +755,37 @@ mod tests {
             .map(|s| s.id.as_str())
             .collect();
         assert_eq!(ready, ["script"]);
-        assert!(p.claim("assets", "a", now()).is_err()); // waits for script
-        assert!(p.claim("script", " ", now()).is_err());
-        p.claim("script", "pane 3", now()).unwrap();
-        let err = p.claim("script", "pane 4", now()).unwrap_err();
+        assert!(p.claim("assets", "a", Via::Cli, now()).is_err()); // waits for script
+        for bad in [" ", "a\nb", "a\u{7}", &"x".repeat(101)] {
+            assert!(p.claim("script", bad, Via::Cli, now()).is_err(), "{bad:?}");
+        }
+        assert!(p.claim("script", &"x".repeat(100), Via::Cli, now()).is_ok());
+        p.unclaim("script").unwrap();
+        p.claim("script", "pane 3", Via::Cli, now()).unwrap();
+        let err = p.claim("script", "pane 4", Via::Cli, now()).unwrap_err();
         assert!(err.contains("claimed by pane 3"), "{err}");
-        p.claim("script", "pane 3", now()).unwrap(); // renews
+        p.claim("script", "pane 3", Via::Cli, now()).unwrap(); // renews
         let text = toml::to_string(&p).unwrap();
         assert_eq!(toml::from_str::<Project>(&text).unwrap(), p);
         p.submit("script", out(), None, Via::Cli, now()).unwrap();
         assert!(p.step("script").unwrap().claim.is_none());
         assert!(!p.ready("script")); // in review
         p.redo("script", "x", Via::Cli, now()).unwrap();
-        p.claim("script", "pane 4", now()).unwrap();
+        p.claim("script", "pane 4", Via::Cli, now()).unwrap();
         p.unclaim("script").unwrap();
         assert!(p.step("script").unwrap().claim.is_none());
         assert!(p.unclaim("nope").is_err());
+
+        // A step sent back by a cascade loses its claim.
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
+        p.approve("script", None, Via::Cli, now()).unwrap();
+        p.claim("script", "pane 5", Via::Mcp, now()).unwrap();
+        assert_eq!(
+            p.step("script").unwrap().claim.as_ref().unwrap().via,
+            Via::Mcp
+        );
+        p.redo("research", "x", Via::Cli, now()).unwrap();
+        assert!(p.step("script").unwrap().claim.is_none());
     }
 
     #[test]

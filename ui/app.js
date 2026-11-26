@@ -113,7 +113,7 @@ function drawProjects() {
 
 // Who has claimed a step, or that it can be worked on now and nobody has.
 function claimText(s) {
-  if (s.claim) return `claimed by ${s.claim.by}`;
+  if (s.claim) return `claimed by ${s.claim.by} (${s.claim.via})`;
   return s.ready ? "ready" : "";
 }
 
@@ -121,6 +121,7 @@ function drawStep() {
   const s = step();
   const inReview = s?.state === "review";
   $("approve").disabled = $("redo").disabled = !inReview;
+  $("unclaim").hidden = !s?.claim;
   $("heading").textContent = s ? `${s.id} · round ${s.round} · ${SAYS[s.state]}` : "Pick a step";
 
   const d = s?.last_decision;
@@ -145,6 +146,16 @@ function drawStep() {
 }
 
 // The upload step: what goes up and where, then what Google did with it.
+// For a claim left by a session that has gone.
+$("unclaim").onclick = async () => {
+  try {
+    await op("unclaim", { project: sel.project, step: sel.step });
+    await refresh();
+  } catch (e) {
+    showError(e);
+  }
+};
+
 function drawUpload(s) {
   const u = s?.id === "upload" ? status?.upload : null;
   const box = $("upload");
