@@ -86,7 +86,7 @@ pub fn read_config() -> Result<Config> {
 }
 
 /// Runs `f` while holding the lock on `path`.
-fn locked<R>(path: &Path, f: impl FnOnce() -> Result<R>) -> Result<R> {
+pub(crate) fn locked<R>(path: &Path, f: impl FnOnce() -> Result<R>) -> Result<R> {
     let mut lock_path = path.as_os_str().to_owned();
     lock_path.push(".lock");
     let lock = File::create(&lock_path)
@@ -151,6 +151,20 @@ pub fn update_config<R>(f: impl FnOnce(&mut Config) -> Result<R>) -> Result<R> {
         let mut config = read_config()?;
         let r = f(&mut config)?;
         write(&path, &config)?;
+        Ok(r)
+    })
+}
+
+/// Reads the JSON file at `path`, changes it with `f` and writes it back,
+/// under the lock.
+pub(crate) fn update_json<T: Serialize + DeserializeOwned, R>(
+    path: &Path,
+    f: impl FnOnce(&mut T) -> Result<R>,
+) -> Result<R> {
+    locked(path, || {
+        let mut value = read_json(path)?;
+        let r = f(&mut value)?;
+        write_json(path, &value)?;
         Ok(r)
     })
 }

@@ -69,6 +69,10 @@ pub fn run(args: &[String]) -> ExitCode {
                 .get_many::<String>(a.name)
                 .map(|v| Value::from(v.cloned().collect::<Vec<_>>())),
             ArgKind::Text => m.get_one::<String>(a.name).map(|s| Value::from(s.as_str())),
+            // A bad list is passed on as text, so it's the dispatch error.
+            ArgKind::Objects => m
+                .get_one::<String>(a.name)
+                .map(|s| serde_json::from_str(s).unwrap_or_else(|_| Value::from(s.as_str()))),
             // Parsed here, not by clap, so a bad number is the dispatch error.
             ArgKind::Integer => m.get_one::<String>(a.name).map(|s| {
                 s.parse::<u64>()

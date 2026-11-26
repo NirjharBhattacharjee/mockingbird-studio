@@ -123,7 +123,7 @@ erDiagram
         string id PK
         string title
         string why
-        string state
+        string project FK
     }
     PROJECT {
         string path PK
@@ -694,7 +694,7 @@ Around those steps:
 ```toml
 [scan]
 time = "07:30"                 # empty: no schedule
-command = ["claude", "-p"]     # empty: no shortlist, items only
+command = ["claude", "-p", "--tools", "", "--strict-mcp-config"]   # empty: no shortlist
 window_hours = 48
 
 [[niche]]
@@ -708,12 +708,14 @@ feeds = ["https://example.com/feed.xml"]
   timeout, 5 MB at most, a generic user agent. It keeps entries from the
   last `window_hours` and drops links already seen in the last 7 days of
   scans. It never fetches a link inside a feed.
-- With `command` set, the app writes the items and a fixed instruction to
-  the command's stdin and reads a JSON list of topics from its stdout. If
-  the command fails, the scan keeps the items and records the error.
+- With `command` set, a scan from the command line (and so the schedule)
+  writes the items and a fixed instruction to the command's stdin and reads
+  a JSON list of topics from its stdout. If the command fails, the scan
+  keeps the items and records the error. A scan over MCP or from the window
+  doesn't run it: the agent ranks the items.
 - Feed text is someone else's text going into a model. It's passed on stdin,
-  never as arguments, and the docs say to configure the command with its
-  tools turned off.
+  never as arguments, and the README says to configure the command with
+  its tools turned off.
 - When you ask in a chat instead, the agent calls `scan` and `topics`, ranks
   the items itself and saves its shortlist with `topics_set`, so the window
   shows it too.
