@@ -495,6 +495,12 @@ impl Project {
         via: Via,
         now: Timestamp,
     ) -> Result<&Decision> {
+        if self.step("film").is_err() {
+            return Err(
+                "this project has no film step: it is one short, posted through its own upload step"
+                    .into(),
+            );
+        }
         let step = self.step(SHORTS)?;
         if step.state != State::Review {
             return Err(format!(
@@ -907,6 +913,15 @@ mod tests {
             p.short_decide("shorts/1.mp4", true, None, Via::Cli, now())
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_short_project_has_no_per_short_decisions() {
+        let mut p = Project::new("T", None, "short", now()).unwrap();
+        let err = p
+            .short_decide("shorts/1.mp4", true, None, Via::Cli, now())
+            .unwrap_err();
+        assert!(err.contains("no film step"), "{err}");
     }
 
     #[test]

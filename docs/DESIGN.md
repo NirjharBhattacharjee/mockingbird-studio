@@ -772,6 +772,10 @@ feeds = ["https://example.com/feed.xml"]
   each output's decision on it, `last_decision` skips these rows, and the
   window shows Keep and Drop beside each short. Approving `shorts` doesn't
   wait for every short to be decided.
+  `short_decide` is refused in a project with no `film` step (the `short`
+  workflow), and the window hides Keep and Drop there. Undecided counts as
+  not kept; only `keep` rows are candidates to post. A keep isn't a post
+  approval: each short still needs its own approved upload and sheet.
 
 ## Security and privacy
 

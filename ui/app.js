@@ -155,7 +155,7 @@ function shortRow(s, o, b) {
   const d = o.decision;
   const said = d ? `${d.decision === "keep" ? "kept" : "dropped"} via ${d.via}${d.note ? `: ${d.note}` : ""}` : "undecided";
   row.append(b, el("span", said, { class: `said ${d?.decision ?? "none"}`, title: d ? new Date(d.at).toLocaleString() : "" }));
-  if (s.state !== "review") return row;
+  if (s.state !== "review" || !status.steps.some((t) => t.id === "film")) return row;
   for (const [decision, label] of [["keep", "Keep"], ["drop", "Drop"]]) {
     const btn = el("button", label, { type: "button", "aria-label": `${label} ${o.path}`, "aria-pressed": String(d?.decision === decision) });
     btn.onclick = async () => {
