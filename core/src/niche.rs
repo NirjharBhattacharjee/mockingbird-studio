@@ -11,9 +11,6 @@ use crate::ops::Args;
 use crate::project::Result;
 use crate::store;
 
-// ponytail: one built-in workflow, as in `Project::new`; templates come in M5.
-const WORKFLOWS: [&str; 1] = ["explainer"];
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
@@ -87,13 +84,11 @@ fn text(v: &str) -> Option<String> {
 }
 
 fn workflow(v: &str) -> Result<Option<String>> {
-    match text(v) {
-        Some(w) if !WORKFLOWS.contains(&w.as_str()) => Err(format!(
-            "unknown workflow {w:?}; the built-in one is {}",
-            WORKFLOWS.join(", ")
-        )),
-        w => Ok(w),
+    let w = text(v);
+    if let Some(w) = &w {
+        crate::workflow::load(w)?;
     }
+    Ok(w)
 }
 
 /// An http or https address with a host. The scheme is lower-cased.

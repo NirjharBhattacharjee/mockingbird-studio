@@ -734,6 +734,14 @@ feeds = ["https://example.com/feed.xml"]
   state. `explainer` and `short` are built in. Your own go in
   `~/.mockingbird-studio/workflows/`. A project copies its template when
   it's made, so editing a template doesn't change old projects.
+- A template file is `[[step]]` tables with `id`, `gate` and `after`. Each
+  `after` names a step listed above it, so there's no loop. `workflows`
+  lists every template, and a file that doesn't load shows its error.
+- `short` is `explainer` without `film`: `shorts` comes after `previews`
+  and `sound`, `description` after `shorts`, and `upload` after `shorts`,
+  `thumbnail` and `description`.
+- `project_new` with a niche and no workflow uses the niche's workflow, then
+  `explainer`. A niche's workflow has to load when it's set.
 - `status` lists the steps that can be worked on now, which is every step
   whose `after` is satisfied. That replaces the brief written by hand for
   each pane.

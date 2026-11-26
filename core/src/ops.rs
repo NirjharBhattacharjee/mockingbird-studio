@@ -17,6 +17,7 @@ use crate::schedule;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
 use crate::upload;
+use crate::workflow;
 use crate::youtube;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,7 +89,7 @@ pub const OPS: &[Op] = &[
             opt(
                 "workflow",
                 Text,
-                "The workflow to copy in. Default: explainer.",
+                "The workflow to copy in. Default: the niche's workflow, else explainer.",
             ),
         ],
         run: project_new,
@@ -407,6 +408,12 @@ pub const OPS: &[Op] = &[
         )],
         run: schedule::scan_time,
     },
+    Op {
+        name: "workflows",
+        help: "Every workflow template with its steps: the built-in explainer and short, and your own from the workflows folder in the studio's home.",
+        args: &[],
+        run: |a, _| workflow::workflows(a),
+    },
 ];
 
 /// Runs the operation `name` with JSON `args`. `via` says which layer called.
@@ -588,7 +595,17 @@ pub(crate) fn new_project(
             "{shown} already has files in it; pick a new or empty folder, or use project_add"
         ));
     }
-    let workflow = workflow.unwrap_or_else(|| "explainer".into());
+    let workflow = match (workflow, &niche) {
+        (Some(w), _) => w,
+        (None, Some(n)) => {
+            let c = store::read_config()?;
+            niche::find(&c.niche, n)
+                .ok()
+                .and_then(|i| c.niche[i].workflow.clone())
+                .unwrap_or_else(|| "explainer".into())
+        }
+        (None, None) => "explainer".into(),
+    };
     let project = Project::new(title, niche, &workflow, Timestamp::now())?;
     let io = |e: std::io::Error| format!("can't make {}: {e}", dir.display());
     fs::create_dir_all(dir).map_err(io)?;
@@ -1016,7 +1033,8 @@ mod tests {
                 "topics",
                 "topics_set",
                 "topic_pick",
-                "scan_time"
+                "scan_time",
+                "workflows"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
@@ -1056,6 +1074,123 @@ mod tests {
         let errs = r["errors"].as_array().unwrap();
         assert!(errs.iter().any(|e| e["niche"] == "scan-test"), "{r}");
         assert!(run("topics", json!({"niche": "scan-test"})).is_err());
+    }
+
+    #[test]
+    fn templates_the_short_workflow_and_a_niches_default() {
+        let t = setup();
+        let wf = store::home().join("workflows");
+        fs::create_dir_all(&wf).unwrap();
+        fs::write(
+            wf.join("tiny.toml"),
+            "[[step]]\nid = \"script\"\ngate = true\n\n[[step]]\nid = \"cut\"\ngate = false\nafter = [\"script\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            wf.join("loop.toml"),
+            "[[step]]\nid = \"a\"\ngate = true\nafter = [\"a\"]\n",
+        )
+        .unwrap();
+
+        let list = run("workflows", json!({})).unwrap()["workflows"].clone();
+        let names: Vec<_> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names[..2], ["explainer", "short"]);
+        let tiny = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["name"] == "tiny")
+            .unwrap();
+        assert_eq!(tiny["steps"][1]["after"][0], "script");
+        let bad = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["name"] == "loop")
+            .unwrap();
+        assert!(
+            bad["error"]
+                .as_str()
+                .unwrap()
+                .contains("isn't a step listed before it"),
+            "{bad}"
+        );
+
+        // A template from a file is copied in, with a folder per step.
+        let dir = t.path().join("tiny-project");
+        let r = run(
+            "project_new",
+            json!({"dir": dir, "title": "T", "workflow": "tiny"}),
+        )
+        .unwrap();
+        assert_eq!(r["workflow"], "tiny");
+        assert_eq!(r["steps"][1]["id"], "cut");
+        assert_eq!(r["steps"][1]["gate"], false);
+        assert!(dir.join("cut").is_dir());
+        // Editing the template later doesn't change the project.
+        fs::write(
+            wf.join("tiny.toml"),
+            "[[step]]\nid = \"other\"\ngate = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            status_of(&canonical(&dir).unwrap()).unwrap()["steps"][1]["id"],
+            "cut"
+        );
+
+        for bad in ["loop", "nope", "../tiny"] {
+            let e = run(
+                "project_new",
+                json!({"dir": t.path().join(bad.replace('/', "")), "title": "T", "workflow": bad}),
+            )
+            .unwrap_err();
+            assert!(
+                e.contains("workflow") || e.contains("loop.toml"),
+                "{bad}: {e}"
+            );
+        }
+
+        // A niche's workflow is the default for its projects.
+        let e = run(
+            "niche_add",
+            json!({"name": "Shorts only", "workflow": "loop"}),
+        )
+        .unwrap_err();
+        assert!(e.contains("loop.toml"), "{e}");
+        run(
+            "niche_add",
+            json!({"name": "Shorts only", "workflow": "short"}),
+        )
+        .unwrap();
+        let dir = t.path().join("a-short");
+        let r = run(
+            "project_new",
+            json!({"dir": dir, "title": "S", "niche": "shorts-only"}),
+        )
+        .unwrap();
+        assert_eq!(r["workflow"], "short");
+        let ids: Vec<_> = r["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&"shorts") && ids.contains(&"upload") && !ids.contains(&"film"),
+            "{ids:?}"
+        );
+        assert!(
+            r["upload"].is_object(),
+            "a short posts through its own upload step"
+        );
+        // An explicit workflow still wins over the niche's.
+        let r = run("project_new", json!({"dir": t.path().join("b"), "title": "B", "niche": "shorts-only", "workflow": "explainer"})).unwrap();
+        assert_eq!(r["workflow"], "explainer");
     }
 
     #[test]
