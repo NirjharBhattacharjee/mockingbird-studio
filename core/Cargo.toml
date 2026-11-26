@@ -19,6 +19,7 @@ base64 = "0.22"
 form_urlencoded = "1"
 security-framework = "3"
 sha2 = "0.10"
+feed-rs = "2"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]

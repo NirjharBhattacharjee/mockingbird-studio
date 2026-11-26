@@ -6,6 +6,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,31 @@ pub fn read<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
     toml::from_str(&text).map_err(|e| format!("{} is not valid: {e}", path.display()))
+}
+
+pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let bytes = fs::read(path).map_err(|e| format!("can't read {}: {e}", path.display()))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{} is not valid: {e}", path.display()))
+}
+
+/// Writes `value` as JSON through a temp file and a rename, so a reader sees
+/// the old file or the new one. Makes the folder if it's missing.
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let io = |e: std::io::Error| format!("can't write {}: {e}", path.display());
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(io)?;
+    }
+    // A name of its own per write, so two writers never share a temp file.
+    static N: AtomicU64 = AtomicU64::new(0);
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let text = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    fs::write(&tmp, text).map_err(io)?;
+    fs::rename(&tmp, path).map_err(io)
 }
 
 pub fn read_config() -> Result<Config> {
