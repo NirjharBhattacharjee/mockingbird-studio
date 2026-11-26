@@ -10,6 +10,7 @@ pub mod project;
 pub mod proxy;
 pub mod rounds;
 pub mod scan;
+pub mod schedule;
 pub mod setup;
 pub mod sheet;
 pub mod store;

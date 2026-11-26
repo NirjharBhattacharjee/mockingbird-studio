@@ -19,6 +19,12 @@ fn default_config() -> Result<PathBuf, String> {
     }
 }
 
+/// A path that changes when the app is rebuilt or moved: a cargo build, or
+/// a copy macOS runs from a random folder because it wasn't moved yet.
+pub(crate) fn fragile(exe: &str) -> bool {
+    exe.contains("/target/") || exe.contains("/AppTranslocation/")
+}
+
 /// The entry for this binary, and a warning when its path won't last.
 fn this_entry() -> Result<(Value, Option<&'static str>), String> {
     let exe =
@@ -36,10 +42,9 @@ fn this_entry() -> Result<(Value, Option<&'static str>), String> {
             .ok_or("MOCKINGBIRD_STUDIO_HOME isn't valid UTF-8")?;
         entry["env"] = json!({ "MOCKINGBIRD_STUDIO_HOME": home });
     }
-    let fragile = exe.contains("/target/") || exe.contains("/AppTranslocation/");
     Ok((
         entry,
-        fragile.then_some(
+        fragile(exe).then_some(
             "this path changes when you rebuild or move the app; run setup from /Applications/mockingbird-studio.app instead",
         ),
     ))

@@ -56,7 +56,7 @@ struct Secret {
 }
 
 /// A variable the tests set. A release build never reads one.
-fn test_var(name: &str) -> Option<String> {
+pub(crate) fn test_var(name: &str) -> Option<String> {
     #[cfg(debug_assertions)]
     {
         std::env::var(name).ok().filter(|v| !v.is_empty())
