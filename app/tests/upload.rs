@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -26,6 +27,11 @@ struct Fake {
     lock_private: bool,
     refuse_thumbnail: bool,
     break_once: bool,
+    /// Every chunk is answered 308 with nothing taken.
+    stall: bool,
+    /// Made read-only once the film has all arrived, so the post row can't
+    /// be written.
+    lock_on_done: Option<PathBuf>,
     // What it saw.
     base: String,
     meta: Value,
@@ -33,6 +39,7 @@ struct Fake {
     breaks: u32,
     thumbnail: Vec<u8>,
     paths: Vec<String>,
+    inserts: u32,
 }
 
 struct Request {
@@ -123,6 +130,7 @@ fn handle(s: TcpStream, fake: &Mutex<Fake>) {
                 reply(&s, "403 Forbidden", "", &e.to_string());
                 return;
             }
+            f.inserts += 1;
             f.meta = serde_json::from_slice(&body).unwrap();
             let at = format!(
                 "Location: {}/upload/youtube/v3/videos?uploadType=resumable&upload_id=s1\r\n",
@@ -134,10 +142,15 @@ fn handle(s: TcpStream, fake: &Mutex<Fake>) {
             let range = req.headers["content-range"].clone();
             let (span, total) = range.trim_start_matches("bytes ").split_once('/').unwrap();
             assert_eq!(total, FILM.to_string());
-            if span != "*" {
+            if span != "*" && !f.stall {
                 let start: usize = span.split('-').next().unwrap().parse().unwrap();
                 assert_eq!(start, f.got.len(), "a chunk starts where Google left off");
                 f.got.extend_from_slice(&body);
+                if f.got.len() == FILM
+                    && let Some(dir) = f.lock_on_done.take()
+                {
+                    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+                }
             }
             if f.got.len() == FILM {
                 let asked = f.meta["status"]["privacyStatus"].as_str().unwrap();
@@ -274,6 +287,20 @@ path = "upload/film.mp4"
 kind = "video"
 
 [[decision]]
+step = "thumbnail"
+round = 1
+decision = "approved"
+at = "2026-11-26T09:30:00Z"
+via = "window"
+
+[[decision]]
+step = "description"
+round = 1
+decision = "approved"
+at = "2026-11-26T09:40:00Z"
+via = "window"
+
+[[decision]]
 step = "upload"
 round = 1
 decision = "approved"
@@ -318,6 +345,26 @@ via = "window"
         let text = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
         (out.status.success(), text)
+    }
+
+    /// Waits until no job is queued or running and returns them all.
+    fn jobs_end(&self) -> Vec<Value> {
+        let end = Instant::now() + Duration::from_secs(30);
+        loop {
+            let (_, out) = self.cli(&["jobs"]);
+            let jobs = serde_json::from_str::<Value>(&out).unwrap()["jobs"]
+                .as_array()
+                .unwrap()
+                .clone();
+            if !jobs
+                .iter()
+                .any(|j| matches!(j["state"].as_str(), Some("queued" | "running")))
+            {
+                return jobs;
+            }
+            assert!(Instant::now() < end, "jobs didn't finish: {jobs:?}");
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     fn project_toml(&self) -> String {
@@ -482,7 +529,12 @@ fn a_spent_quota_fails_with_googles_reason() {
         out.contains("quotaExceeded") && out.contains("run the job again"),
         "{out}"
     );
-    assert!(!w.project_toml().contains("[[post]]"));
+    // The claim stays, with no session, for the next run to take over.
+    let p = w.project_toml();
+    assert!(
+        p.contains("state = \"uploading\"") && !p.contains("video ="),
+        "{p}"
+    );
     assert!(w.fake.lock().unwrap().got.is_empty());
 }
 
@@ -504,4 +556,88 @@ fn nothing_is_posted_without_the_upload_approval() {
     let (ok, out) = w.upload();
     assert!(!ok && out.contains("isn't approved"), "{out}");
     assert!(w.fake.lock().unwrap().paths.is_empty());
+}
+
+#[test]
+fn a_rerun_after_a_lost_post_row_records_the_video_without_a_second_upload() {
+    let w = World::new(|_| {});
+    w.fake.lock().unwrap().lock_on_done = Some(w.project.clone());
+    let (ok, out) = w.upload();
+    std::fs::set_permissions(&w.project, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!ok, "{out}");
+    assert!(out.contains("https://youtu.be/vid_123-A is up"), "{out}");
+    let p = w.project_toml();
+    assert!(
+        p.contains("state = \"uploading\"") && p.contains("session = "),
+        "{p}"
+    );
+
+    let (ok, out) = w.upload();
+    assert!(ok, "{out}");
+    assert!(out.contains("asking YouTube how far it got"), "{out}");
+    let f = w.fake.lock().unwrap();
+    assert_eq!(f.inserts, 1, "one video, not two");
+    assert!(f.got == film());
+    let p = w.project_toml();
+    assert_eq!(p.matches("[[post]]").count(), 1, "{p}");
+    assert!(
+        p.contains("video = \"vid_123-A\"") && p.contains("thumbnail = \"set\""),
+        "{p}"
+    );
+    assert!(!p.contains("uploading") && !p.contains("session = "), "{p}");
+}
+
+#[test]
+fn two_job_starts_at_once_make_one_upload() {
+    let w = World::new(|_| {});
+    let dir = w.project.to_str().unwrap();
+    let starts: Vec<_> = (0..2)
+        .map(|_| {
+            w.command()
+                .args(["job-start", "--kind", "youtube", "--project", dir, "--json"])
+                .output()
+        })
+        .collect();
+    assert!(starts.iter().any(|o| o.as_ref().unwrap().status.success()));
+    let jobs = w.jobs_end();
+    assert_eq!(
+        jobs.iter().filter(|j| j["state"] == "done").count(),
+        1,
+        "{jobs:?}"
+    );
+    assert_eq!(w.fake.lock().unwrap().inserts, 1);
+    assert_eq!(w.project_toml().matches("[[post]]").count(), 1);
+}
+
+#[test]
+fn a_live_claim_stops_a_second_run() {
+    let w = World::new(|_| {});
+    let id = "20261126-100000-beef";
+    let job_dir = w.home.path().join("jobs").join(id);
+    std::fs::create_dir_all(&job_dir).unwrap();
+    std::fs::write(
+        job_dir.join("job.toml"),
+        format!("id = \"{id}\"\nkind = \"youtube\"\ntool = \"upload\"\ncommand = []\nstate = \"running\"\ncreated = \"2026-11-26T10:00:00Z\"\n"),
+    )
+    .unwrap();
+    let claim = format!(
+        "\n[[post]]\nstep = \"upload\"\nround = 1\nat = \"{}\"\njob = \"{id}\"\nstate = \"uploading\"\nchannel = \"main\"\nvisibility_asked = \"public\"\n",
+        jiff::Timestamp::now()
+    );
+    std::fs::write(w.project.join("project.toml"), w.project_toml() + &claim).unwrap();
+    let dir = w.project.to_str().unwrap();
+    let (ok, out) = w.cli(&["job-start", "--kind", "youtube", "--project", dir]);
+    assert!(!ok && out.contains("already uploading"), "{out}");
+    let (ok, out) = w.upload();
+    assert!(!ok && out.contains("already uploading"), "{out}");
+    assert!(w.fake.lock().unwrap().paths.is_empty());
+}
+
+#[test]
+fn chunks_that_google_never_takes_give_up_after_five() {
+    let w = World::new(|f| f.stall = true);
+    let (ok, out) = w.upload();
+    assert!(!ok);
+    assert!(out.contains("broke 5 times in a row at byte 0"), "{out}");
+    assert_eq!(out.matches("the upload broke at byte").count(), 4, "{out}");
 }

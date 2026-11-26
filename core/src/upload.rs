@@ -2,15 +2,20 @@
 //! `mockingbird-studio youtube-upload <project>` runs under the job runner:
 //!
 //! 1. trades the Keychain's refresh token for an access token,
-//! 2. opens a resumable upload with the sheet and the visibility,
+//! 2. claims the post in `project.toml` and opens a resumable upload with
+//!    the sheet and the visibility,
 //! 3. sends the film in chunks, asking Google how much arrived when a chunk
 //!    breaks and carrying on from there,
-//! 4. writes the `[[post]]` row as soon as Google answers,
+//! 4. turns the claim into the `[[post]]` row as soon as Google answers,
 //! 5. sends the thumbnail and records whether it was set.
+//!
+//! The claim is what stops a second post: a run that finds a live one stops,
+//! and a run that finds a dead job's claim asks that job's session how far
+//! it got before starting anything new.
 //!
 //! It talks only to Google's token address and YouTube's API host, and the
 //! upload session must stay on that host. The access token is never
-//! printed: everything here goes to the job's log.
+//! printed or written: everything printed here goes to the job's log.
 
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -18,21 +23,24 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
 
 use crate::jobs::{self, Job, JobState};
 use crate::niche::Visibility;
-use crate::project::{Kind, Post, Project, Result, State, Verdict, Via};
+use crate::project::{Kind, Output, Post, Project, Result, State, Step, Verdict, Via};
 use crate::sheet::{self, Sheet};
 use crate::store::{self, PROJECT_FILE};
 use crate::youtube;
 
 const STEP: &str = "upload";
+const UPLOADING: &str = "uploading";
 /// A multiple of 256 KiB, as the resumable protocol asks.
 const CHUNK: u64 = 8 << 20;
 /// Breaks in a row before the job gives up.
 const TRIES: u64 = 5;
+/// How long Google keeps a resumable session: a week.
+const SESSION_LIFE: SignedDuration = SignedDuration::from_hours(7 * 24);
 
 /// What a post needs, checked when the job is queued and again when it runs.
 struct Plan {
@@ -44,35 +52,69 @@ struct Plan {
     visibility: Visibility,
 }
 
-fn plan(dir: &Path) -> Result<Plan> {
-    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
-    if let Some(post) = p.posts.first() {
-        return Err(format!("this project is already posted: {}", post.url));
-    }
-    let step = p.step(STEP)?;
-    let approval = p.last_decision(STEP).filter(|d| {
+/// Step `id` with its current round approved: the last decision on it is a
+/// yes to that round, and nothing has moved it since.
+fn approved<'a>(p: &'a Project, id: &str) -> Result<&'a Step> {
+    let step = p.step(id)?;
+    let yes = p.last_decision(id).filter(|d| {
         d.decision == Verdict::Approved
             && d.round == step.round
             && matches!(step.state, State::Approved | State::Done)
     });
-    let Some(approval) = approval else {
-        return Err("the upload step isn't approved, and nothing is posted without that".into());
-    };
-    let videos: Vec<_> = step
+    match yes {
+        Some(_) => Ok(step),
+        None => Err(format!(
+            "the {id} step isn't approved, and nothing is posted without that"
+        )),
+    }
+}
+
+fn the_only(step: &Step, kind: Kind, what: &str) -> Result<Output> {
+    match step
         .outputs
         .iter()
-        .filter(|o| o.kind == Kind::Video)
-        .collect();
-    let [video] = videos[..] else {
-        return Err("the upload step needs exactly one video".into());
-    };
-    let thumbnail = p
-        .step("thumbnail")?
-        .outputs
-        .iter()
-        .find(|o| o.kind == Kind::Image)
-        .ok_or("the thumbnail step has no image")?;
-    let (sheet, _) = sheet::submitted(dir, p.step("description")?.round)?;
+        .filter(|o| o.kind == kind)
+        .collect::<Vec<_>>()[..]
+    {
+        [o] => Ok(o.clone()),
+        _ => Err(format!("the {} step needs exactly one {what}", step.id)),
+    }
+}
+
+/// A claim whose job may still be sending: it's recent and its job is
+/// queued or running.
+fn live(claim: &Post) -> bool {
+    Timestamp::now().duration_since(claim.at) < SESSION_LIFE
+        && claim
+            .job
+            .as_deref()
+            .and_then(|id| jobs::read(id).ok())
+            .is_some_and(|j| matches!(j.state, JobState::Queued | JobState::Running))
+}
+
+/// Refuses a project that's posted or being posted.
+fn check_unposted(p: &Project) -> Result<()> {
+    for post in &p.posts {
+        if post.state.is_none() {
+            return Err(format!("this project is already posted: {}", post.url));
+        }
+        if live(post) {
+            return Err(format!(
+                "job {} is already uploading this project",
+                post.job.as_deref().unwrap_or_default()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn plan(dir: &Path) -> Result<Plan> {
+    let p: Project = store::read(&dir.join(PROJECT_FILE))?;
+    check_unposted(&p)?;
+    let step = approved(&p, STEP)?;
+    let video = the_only(step, Kind::Video, "video")?;
+    let thumbnail = the_only(approved(&p, "thumbnail")?, Kind::Image, "image")?;
+    let (sheet, _) = sheet::submitted(dir, approved(&p, "description")?.round)?;
     let config = store::read_config()?;
     let niche = p
         .niche
@@ -92,8 +134,9 @@ fn plan(dir: &Path) -> Result<Plan> {
         ));
     }
     // PRD F5: an approval that came through MCP posts private.
+    let by_mcp = p.last_decision(STEP).is_some_and(|d| d.via == Via::Mcp);
     let visibility = match niche {
-        Some(n) if approval.via != Via::Mcp => n.visibility,
+        Some(n) if !by_mcp => n.visibility,
         _ => Visibility::Private,
     };
     Ok(Plan {
@@ -154,6 +197,48 @@ fn name(v: Visibility) -> String {
     json!(v).as_str().unwrap_or_default().to_string()
 }
 
+/// Claims the post under the project's lock. A dead job's claim is taken
+/// over, and its session, if it had one, is returned to be asked about.
+fn claim(dir: &Path, plan: &Plan, job: &Option<String>) -> Result<Option<String>> {
+    store::update_project(dir, |p| {
+        check_unposted(p)?;
+        let now = Timestamp::now();
+        if let Some(c) = p.posts.iter_mut().find(|c| c.state.is_some()) {
+            c.job = job.clone();
+            c.at = now;
+            return Ok(c.session.clone());
+        }
+        p.posts.push(Post {
+            step: STEP.into(),
+            round: plan.round,
+            at: now,
+            job: job.clone(),
+            state: Some(UPLOADING.into()),
+            session: None,
+            video: String::new(),
+            url: String::new(),
+            channel: plan.label.clone(),
+            visibility_asked: plan.visibility,
+            visibility_set: String::new(),
+            thumbnail: None,
+            rest: Default::default(),
+        });
+        Ok(None)
+    })
+}
+
+fn with_claim(dir: &Path, f: impl FnOnce(&mut Post)) -> Result<()> {
+    store::update_project(dir, |p| {
+        let c = p
+            .posts
+            .iter_mut()
+            .find(|c| c.state.is_some())
+            .ok_or("the claim on this post is gone from project.toml")?;
+        f(c);
+        Ok(())
+    })
+}
+
 fn upload(dir: &Path) -> Result<String> {
     let plan = plan(dir)?;
     let size = fs::metadata(&plan.video)
@@ -173,8 +258,30 @@ fn upload(dir: &Path) -> Result<String> {
         .timeout_global(Some(Duration::from_secs(600)))
         .build()
         .into();
-    let session = open(&agent, &auth, &plan, size)?;
-    let video = send(&agent, &auth, &session, &plan.video, size)?;
+    let job = std::env::var("MOCKINGBIRD_STUDIO_JOB").ok();
+    let mut session = claim(dir, &plan, &job)?;
+    let mut resuming = session.is_some();
+    if resuming {
+        eprintln!("an earlier job left this upload unfinished; asking YouTube how far it got");
+    }
+    let video = loop {
+        let at = match session.take() {
+            Some(s) => s,
+            None => {
+                let s = open(&agent, &auth, &plan, size)?;
+                with_claim(dir, |c| c.session = Some(s.clone()))?;
+                s
+            }
+        };
+        match send(&agent, &auth, &at, &plan.video, size, resuming)? {
+            Some(v) => break v,
+            None if resuming => {
+                eprintln!("the earlier upload session is gone; starting over");
+                resuming = false;
+            }
+            None => return Err("YouTube dropped the upload session. Run the job again".into()),
+        }
+    };
 
     let id = video["id"].as_str().unwrap_or_default().to_string();
     if id.is_empty()
@@ -189,24 +296,20 @@ fn upload(dir: &Path) -> Result<String> {
         .as_str()
         .unwrap_or("unknown")
         .to_string();
-    let post = Post {
-        step: STEP.into(),
-        round: plan.round,
-        at: Timestamp::now(),
-        job: std::env::var("MOCKINGBIRD_STUDIO_JOB").ok(),
-        video: id.clone(),
-        url: url.clone(),
-        channel: plan.label.clone(),
-        visibility_asked: plan.visibility,
-        visibility_set: set.clone(),
-        thumbnail: None,
-        rest: Default::default(),
-    };
-    store::update_project(dir, |p| {
-        p.posts.push(post);
-        Ok(())
+    with_claim(dir, |c| {
+        c.at = Timestamp::now();
+        c.job = job.clone();
+        c.state = None;
+        c.session = None;
+        c.video = id.clone();
+        c.url = url.clone();
+        c.visibility_set = set.clone();
     })
-    .map_err(|e| format!("{url} is up, but its post row couldn't be written: {e}"))?;
+    .map_err(|e| {
+        format!(
+            "{url} is up, but its post row couldn't be written: {e}. Run the job again to record it"
+        )
+    })?;
     let mut lines = vec![format!("Posted {url} to {} as {set}.", plan.label)];
     if set != name(plan.visibility) {
         lines.push(format!(
@@ -334,12 +437,21 @@ fn open(agent: &ureq::Agent, auth: &str, plan: &Plan, size: u64) -> Result<Strin
 }
 
 /// Sends the file from wherever Google says it has got to, and returns the
-/// video Google made. A chunk that breaks (no answer, or a 5xx) is followed
-/// by asking how much arrived; `TRIES` breaks in a row give up.
-fn send(agent: &ureq::Agent, auth: &str, session: &str, path: &Path, size: u64) -> Result<Value> {
+/// video Google made, or `None` when the session is gone (404 or 410).
+/// `asking` starts by asking how much arrived, to resume an earlier job's
+/// session. A chunk that breaks (no answer, a 5xx, or a 308 that took none
+/// of it) is followed by asking; `TRIES` breaks without progress give up.
+fn send(
+    agent: &ureq::Agent,
+    auth: &str,
+    session: &str,
+    path: &Path,
+    size: u64,
+    mut asking: bool,
+) -> Result<Option<Value>> {
     let io = |e: std::io::Error| format!("{}: {e}", path.display());
     let mut file = File::open(path).map_err(io)?;
-    let (mut from, mut breaks, mut asking) = (0u64, 0u64, false);
+    let (mut from, mut breaks) = (0u64, 0u64);
     loop {
         let (range, chunk) = if asking {
             (format!("bytes */{size}"), vec![])
@@ -360,18 +472,26 @@ fn send(agent: &ureq::Agent, auth: &str, session: &str, path: &Path, size: u64) 
         let why = match reply {
             Ok((200 | 201, _, body)) => {
                 return serde_json::from_str(&body)
+                    .map(Some)
                     .map_err(|_| "the upload finished but Google's reply isn't JSON".into());
             }
+            Ok((404 | 410, _, _)) => return Ok(None),
             Ok((308, range, _)) => {
                 // `bytes=0-N` is what has arrived; none means nothing has.
-                from = range
+                let at = range
                     .and_then(|r| r.rsplit('-').next()?.parse::<u64>().ok())
-                    .map_or(0, |end| end + 1);
-                if !asking {
+                    .map_or(0, |end| end + 1)
+                    .min(size);
+                let progressed = at > from;
+                let was_asking = std::mem::replace(&mut asking, false);
+                from = at;
+                if progressed {
                     breaks = 0;
                 }
-                asking = false;
-                continue;
+                if progressed || was_asking {
+                    continue;
+                }
+                "YouTube took none of the chunk".to_string()
             }
             // ponytail: an access token lasts an hour, so an upload longer
             // than that ends here with a 401. Refresh it here if films get that big.
@@ -380,7 +500,7 @@ fn send(agent: &ureq::Agent, auth: &str, session: &str, path: &Path, size: u64) 
             Err(e) => e.to_string(),
         };
         breaks += 1;
-        if breaks > TRIES {
+        if breaks >= TRIES {
             return Err(format!(
                 "the upload broke {TRIES} times in a row at byte {from} of {size} ({why}). Run the job again"
             ));

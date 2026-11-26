@@ -591,7 +591,10 @@ fn finish(r: &mut Running, status: std::io::Result<ExitStatus>) {
             // The log's last line is usually the reason, in the job's own words.
             let tail = log_tail(&job.id);
             job.error = Some(match tail.lines().rev().find(|l| !l.trim().is_empty()) {
-                Some(last) => format!("{why}: {}", last.trim()),
+                Some(last) => format!(
+                    "{why}: {}",
+                    last.trim().chars().take(300).collect::<String>()
+                ),
                 None => why,
             });
         }
