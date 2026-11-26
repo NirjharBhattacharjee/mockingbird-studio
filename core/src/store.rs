@@ -186,7 +186,7 @@ mod tests {
         text = text.replacen("next_note = 1\n", "next_note = 1\ncolour = \"red\"\n", 1);
         text = text.replacen("round = 0\n", "round = 0\nlocked = true\n", 1);
         text.push_str(
-            "\n[[post]]\nstep = \"upload\"\nvideo = \"VIDEO_ID\"\nat = 2026-11-25T18:30:00Z\n",
+            "\n[[later]]\nstep = \"upload\"\nvideo = \"VIDEO_ID\"\nat = 2026-11-25T18:30:00Z\n",
         );
         fs::write(&path, text).unwrap();
 
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(back.notes.len(), 1);
         assert_eq!(back.rest["colour"].as_str(), Some("red"));
         assert_eq!(back.steps[0].rest["locked"].as_bool(), Some(true));
-        let post = &back.rest["post"][0];
+        let post = &back.rest["later"][0];
         assert_eq!(post["video"].as_str(), Some("VIDEO_ID"));
         assert_eq!(
             post["at"].as_datetime().unwrap().to_string(),

@@ -681,8 +681,13 @@ Around those steps:
   is up, and the post row says the thumbnail was refused.
 - An expired sign-in or a spent quota fails the job with Google's message.
   Nothing is retried on its own after that. You run it again.
-- A job that dies starts the upload over as a new job. Carrying a half-sent
-  upload across runs can come later, if films get big enough to need it.
+- Before it opens the upload, the job claims the post under the project's
+  lock: a `post` row with `state = "uploading"`, its job and the session's
+  address (never the token). A second run that finds a live claim stops. A
+  run that finds a dead job's claim asks that session how much arrived:
+  finished means the row is written from Google's answer with no second
+  upload, part means it carries on, and a session Google no longer knows
+  means it starts over. Once posted, the row loses `state` and `session`.
 
 ## The scan (M4)
 
@@ -757,12 +762,13 @@ feeds = ["https://example.com/feed.xml"]
 - MCP tests start the binary and speak JSON-RPC over its stdio.
 - Tests that need ffmpeg or mockingbird are `#[ignore]`.
 - The upload job is tested against a small server the test starts, which
-  speaks enough of the resumable protocol. Tests take a token from the
-  environment, so they touch neither the Keychain nor Google. One upload to
-  a real test channel is done by hand, as evidence for the PR.
+  speaks enough of the token exchange, the resumable protocol and
+  `thumbnails.set`. It uses the sign-in's variables below, so it touches
+  neither the Keychain nor Google. One upload to a real test channel is
+  done by hand, as evidence for the PR.
 - The sign-in is tested against a fake Google the test starts. Three
   variables make that possible: `MOCKINGBIRD_STUDIO_GOOGLE` points the consent,
-  token and revoke endpoints at it (an address on 127.0.0.1 only),
+  token and revoke endpoints and YouTube's API host at it (an address on 127.0.0.1 only),
   `MOCKINGBIRD_STUDIO_BROWSER` replaces `open`, and
   `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps Keychain items in a folder. Only
   debug builds read them.
@@ -799,5 +805,4 @@ one time crate. M3 adds an HTTP client and Keychain access. M4 adds
 | An updater | never. It would be a network call nobody asked for |
 | Uploading captions | you accept the wider Google scope it needs |
 | A publish time, playlists | someone asks |
-| Carrying a half-sent upload across job runs | a film is big enough that starting over hurts |
 | A Google client shipped with the app | never, unless the project takes on its quota and audit |

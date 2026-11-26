@@ -5,8 +5,8 @@
 //!
 //! Three variables exist for the tests, which touch neither Google nor the
 //! Keychain. Only debug builds read them; a release build always uses
-//! Google, `open` and the Keychain: `MOCKINGBIRD_STUDIO_GOOGLE` points the endpoints at a server on
-//! 127.0.0.1, `MOCKINGBIRD_STUDIO_BROWSER` is run with the consent address
+//! Google, `open` and the Keychain: `MOCKINGBIRD_STUDIO_GOOGLE` points the endpoints, and
+//! the upload job's API host, at a server on 127.0.0.1, `MOCKINGBIRD_STUDIO_BROWSER` is run with the consent address
 //! instead of `open`, and `MOCKINGBIRD_STUDIO_KEYCHAIN_DIR` keeps each item in
 //! a file in that folder instead of the Keychain.
 
@@ -30,6 +30,8 @@ use crate::store;
 const AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN: &str = "https://oauth2.googleapis.com/token";
 const REVOKE: &str = "https://oauth2.googleapis.com/revoke";
+/// Uploads and thumbnails. With the token address, the only hosts posting talks to.
+const API: &str = "https://www.googleapis.com";
 pub const SCOPE: &str = "https://www.googleapis.com/auth/youtube.upload";
 const SERVICE: &str = "mockingbird-studio";
 const WAIT: Duration = Duration::from_secs(5 * 60);
@@ -66,14 +68,22 @@ fn test_var(name: &str) -> Option<String> {
     }
 }
 
-/// Google's address, or the test server's on 127.0.0.1.
+/// The test server on 127.0.0.1, in a debug build that names one.
+fn test_google() -> Option<String> {
+    test_var("MOCKINGBIRD_STUDIO_GOOGLE").filter(|b| b.starts_with("http://127.0.0.1:"))
+}
+
+/// Google's address, or the test server's.
 fn endpoint(real: &str) -> String {
-    match test_var("MOCKINGBIRD_STUDIO_GOOGLE") {
-        Some(base) if base.starts_with("http://127.0.0.1:") => {
-            format!("{base}/{}", real.rsplit('/').next().unwrap_or_default())
-        }
-        _ => real.to_string(),
+    match test_google() {
+        Some(base) => format!("{base}/{}", real.rsplit('/').next().unwrap_or_default()),
+        None => real.to_string(),
     }
+}
+
+/// YouTube's API host, or the test server.
+pub(crate) fn api() -> String {
+    test_google().unwrap_or_else(|| API.to_string())
 }
 
 fn check_label(label: &str) -> Result<()> {
@@ -382,6 +392,38 @@ pub fn connect(label: &str, client_file: &str) -> Result<Value> {
         return Err(e);
     }
     Ok(json!({"label": label, "signed_in": true, "scope": SCOPE}))
+}
+
+pub(crate) fn signed_in(label: &str) -> Result<bool> {
+    Ok(load(label)?.is_some())
+}
+
+/// A fresh access token for `label`. It lives only in the caller's memory.
+pub(crate) fn access_token(label: &str) -> Result<String> {
+    let s = load(label)?
+        .ok_or_else(|| format!("{label} isn't signed in. Sign in with youtube_connect"))?;
+    let tokens = post(
+        TOKEN,
+        &[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &s.refresh_token),
+            ("client_id", &s.client_id),
+            ("client_secret", &s.client_secret),
+        ],
+    )
+    .map_err(|e| {
+        if e.contains("invalid_grant") {
+            format!(
+                "the sign-in for {label} has expired or was revoked ({e}). Sign in again with youtube_connect, then run the job again"
+            )
+        } else {
+            e
+        }
+    })?;
+    tokens["access_token"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "Google sent no access token".into())
 }
 
 /// `youtube_status`: each channel's label, whether it has a token, and its id

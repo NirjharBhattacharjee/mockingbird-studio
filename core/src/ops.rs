@@ -15,6 +15,7 @@ use crate::rounds;
 use crate::scan;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
+use crate::upload;
 use crate::youtube;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,10 +172,14 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "job_start",
-        help: "Queue a long job. It runs in a separate runner, two at a time, and keeps going after the chat or window that queued it closes. The kind tool runs a tool declared in config.toml with values for its placeholders, never a command line. The kind mockingbird makes one call to mockingbird's motion, render or look with args, and waits however long it takes.",
+        help: "Queue a long job. It runs in a separate runner, two at a time, and keeps going after the chat or window that queued it closes. The kind tool runs a tool declared in config.toml with values for its placeholders, never a command line. The kind mockingbird makes one call to mockingbird's motion, render or look with args, and waits however long it takes. The kind youtube posts a project whose upload step is approved, once.",
         args: &[
-            req("kind", Text, "The job's kind: tool or mockingbird."),
             req(
+                "kind",
+                Text,
+                "The job's kind: tool, mockingbird or youtube.",
+            ),
+            opt(
                 "tool",
                 Text,
                 "For kind tool, the tool's name from [tool.<name>] in config.toml. For kind mockingbird: motion, render or look.",
@@ -673,11 +678,16 @@ fn redo(a: &Args, via: Via) -> Result<Value> {
 
 fn job_start(a: &Args, _: Via) -> Result<Value> {
     let kind = a.text("kind");
+    if kind == "youtube" {
+        let dir = a.opt("project").ok_or("a youtube job needs its project")?;
+        return Ok(json!(upload::start(project_dir(&dir)?)?));
+    }
     if kind != "tool" && kind != "mockingbird" {
         return Err(format!(
-            "no job kind {kind:?}; the kinds are: tool, mockingbird"
+            "no job kind {kind:?}; the kinds are: tool, mockingbird, youtube"
         ));
     }
+    let tool = a.opt("tool").ok_or(format!("a {kind} job needs tool"))?;
     let values: std::collections::BTreeMap<String, String> = a
         .list("values")
         .into_iter()
@@ -699,17 +709,12 @@ fn job_start(a: &Args, _: Via) -> Result<Value> {
             return Err("a mockingbird job takes args, not values".into());
         }
         let args = a.opt("args").ok_or("a mockingbird job needs args")?;
-        return Ok(json!(jobs::start_mockingbird(
-            &a.text("tool"),
-            &args,
-            project,
-            step
-        )?));
+        return Ok(json!(jobs::start_mockingbird(&tool, &args, project, step)?));
     }
     if a.opt("args").is_some() {
         return Err("a tool job takes values, not args".into());
     }
-    Ok(json!(jobs::start(&a.text("tool"), values, project, step)?))
+    Ok(json!(jobs::start(&tool, values, project, step)?))
 }
 
 fn jobs(a: &Args, _: Via) -> Result<Value> {
@@ -734,15 +739,11 @@ fn job_cancel(a: &Args, _: Via) -> Result<Value> {
 }
 
 /// The sheet as submitted this round, so the person approves what the agent
-/// sent. `kept` is false when the round has no copy and the live file stands in.
+/// sent.
 fn sheet(a: &Args, _: Via) -> Result<Value> {
     let dir = a.project()?;
     let p: Project = store::read(&dir.join(PROJECT_FILE))?;
-    let round = p.step("description")?.round;
-    let (s, kept) = match rounds::kept(&dir, "description", round, sheet::PATH)? {
-        Some(path) => (store::read::<sheet::Sheet>(&path)?, true),
-        None => (sheet::read(&dir)?, false),
-    };
+    let (s, kept) = sheet::submitted(&dir, p.step("description")?.round)?;
     let description = s.full_description();
     Ok(json!({
         "kept": kept,

@@ -541,6 +541,7 @@ fn spawn(job: &Job) -> std::io::Result<Child> {
     Command::new(&job.command[0])
         .args(&job.command[1..])
         .current_dir(job.cwd())
+        .env("MOCKINGBIRD_STUDIO_JOB", &job.id)
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log)
@@ -582,10 +583,19 @@ fn finish(r: &mut Running, status: std::io::Result<ExitStatus>) {
         _ if r.term_at.is_some() => job.state = JobState::Cancelled,
         Ok(s) => {
             job.state = JobState::Failed;
-            job.error = Some(match (s.code(), s.signal()) {
+            let why = match (s.code(), s.signal()) {
                 (Some(c), _) => format!("exited with code {c}"),
                 (_, Some(sig)) => format!("killed by signal {sig}"),
                 _ => "stopped".into(),
+            };
+            // The log's last line is usually the reason, in the job's own words.
+            let tail = log_tail(&job.id);
+            job.error = Some(match tail.lines().rev().find(|l| !l.trim().is_empty()) {
+                Some(last) => format!(
+                    "{why}: {}",
+                    last.trim().chars().take(300).collect::<String>()
+                ),
+                None => why,
             });
         }
         Err(e) => {

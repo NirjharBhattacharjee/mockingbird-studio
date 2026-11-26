@@ -4,6 +4,8 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::niche::Visibility;
+
 pub const SCHEMA: u32 = 1;
 
 pub type Result<T> = std::result::Result<T, String>;
@@ -24,6 +26,8 @@ pub struct Project {
     pub decisions: Vec<Decision>,
     #[serde(default, rename = "note")]
     pub notes: Vec<Note>,
+    #[serde(default, rename = "post", skip_serializing_if = "Vec::is_empty")]
+    pub posts: Vec<Post>,
     /// Keys this version doesn't know, kept so a write never drops them.
     #[serde(flatten)]
     pub rest: toml::Table,
@@ -147,6 +151,45 @@ pub struct Note {
     pub rest: toml::Table,
 }
 
+/// A video the `youtube` job put up, or is putting up. Never removed.
+///
+/// The job writes the row as a claim (`state = "uploading"`, with the
+/// upload session's address) before it sends anything, so a second run
+/// stops and a run after a dead one resumes that session instead of posting
+/// twice. When Google answers, the same row gets the video and loses
+/// `state` and `session`; then `thumbnail` is filled in.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Post {
+    pub step: String,
+    pub round: u32,
+    /// When it was claimed, then when it was posted.
+    #[serde(deserialize_with = "time")]
+    pub at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
+    /// `uploading` while it's a claim; absent once posted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// The resumable session's address, while it's a claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub video: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    pub channel: String,
+    pub visibility_asked: Visibility,
+    /// What Google's reply said.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub visibility_set: String,
+    /// set, refused or failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteState {
@@ -220,6 +263,7 @@ impl Project {
             steps,
             decisions: vec![],
             notes: vec![],
+            posts: vec![],
             rest: Default::default(),
         })
     }
