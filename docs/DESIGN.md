@@ -748,6 +748,11 @@ feeds = ["https://example.com/feed.xml"]
 - `status` lists the steps that can be worked on now, which is every step
   whose `after` is satisfied. That replaces the brief written by hand for
   each pane.
+- An agent claims a step with `claim` and its own name before it starts,
+  so two panes don't take the same step. `status` leaves claimed steps out
+  of `ready`, `submit` drops the claim, and `unclaim` lets go of one left
+  by a session that has gone. The window shows each step as ready or
+  claimed by whom.
 - A project made with `short` is one short, and posts through its own
   upload step like any project. Shorts cut inside a film's project get a
   decision each, and then a post each, with their own title and description.

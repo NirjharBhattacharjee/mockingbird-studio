@@ -48,6 +48,20 @@ pub struct Step {
     /// The current round's files.
     #[serde(default, rename = "output")]
     pub outputs: Vec<Output>,
+    /// Who is working on the step, from `claim`. `submit` clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<Claim>,
+    /// Keys this version doesn't know, kept so a write never drops them.
+    #[serde(flatten)]
+    pub rest: toml::Table,
+}
+
+/// A name the agent picked for itself, such as a pane or session, and when.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Claim {
+    pub by: String,
+    #[serde(deserialize_with = "time")]
+    pub at: Timestamp,
     /// Keys this version doesn't know, kept so a write never drops them.
     #[serde(flatten)]
     pub rest: toml::Table,
@@ -235,6 +249,7 @@ impl Project {
                 round: 0,
                 summary: None,
                 outputs: vec![],
+                claim: None,
                 rest: Default::default(),
             })
             .collect();
@@ -298,6 +313,43 @@ impl Project {
         Ok(())
     }
 
+    /// Whether step `id` is work to do now: in todo or redo, and every step
+    /// in `after` approved or done. Claimed or not.
+    pub fn ready(&self, id: &str) -> bool {
+        self.step(id)
+            .is_ok_and(|s| matches!(s.state, State::Todo | State::Redo))
+            && self.check_submit(id).is_ok()
+    }
+
+    /// Marks step `id` as taken by `by`, so a second agent picks another.
+    /// Refused under the submit rule, or when someone else holds it.
+    /// Claiming again under the same name renews the time.
+    pub fn claim(&mut self, id: &str, by: &str, now: Timestamp) -> Result<&Claim> {
+        let by = by.trim();
+        if by.is_empty() {
+            return Err("a claim needs a name, such as the pane or session".into());
+        }
+        self.check_submit(id)?;
+        let step = self.step_mut(id)?;
+        if let Some(c) = step.claim.as_ref().filter(|c| c.by != by) {
+            return Err(format!(
+                "step {id:?} is claimed by {} since {}; unclaim it first",
+                c.by, c.at
+            ));
+        }
+        Ok(step.claim.insert(Claim {
+            by: by.to_string(),
+            at: now,
+            rest: Default::default(),
+        }))
+    }
+
+    /// Lets go of step `id`. Nothing to do when it isn't claimed.
+    pub fn unclaim(&mut self, id: &str) -> Result<()> {
+        self.step_mut(id)?.claim = None;
+        Ok(())
+    }
+
     /// Records a new round of files. Refused until every step in `after`
     /// is approved or done: this is what makes a gate hold.
     pub fn submit(
@@ -313,6 +365,7 @@ impl Project {
         let step = self.step_mut(id)?;
         step.round += 1;
         step.outputs = outputs;
+        step.claim = None;
         step.summary = summary;
         step.state = if step.gate {
             State::Review
@@ -684,6 +737,34 @@ mod tests {
         assert!(p.submit("assets", out(), None, Via::Cli, now()).is_err()); // done
         assert!(p.approve("assets", None, Via::Cli, now()).is_err()); // done
         assert!(p.submit("nope", out(), None, Via::Cli, now()).is_err());
+    }
+
+    #[test]
+    fn ready_steps_take_one_claim_each_until_submit() {
+        let mut p = project();
+        let ready: Vec<_> = p
+            .steps
+            .iter()
+            .filter(|s| p.ready(&s.id))
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(ready, ["script"]);
+        assert!(p.claim("assets", "a", now()).is_err()); // waits for script
+        assert!(p.claim("script", " ", now()).is_err());
+        p.claim("script", "pane 3", now()).unwrap();
+        let err = p.claim("script", "pane 4", now()).unwrap_err();
+        assert!(err.contains("claimed by pane 3"), "{err}");
+        p.claim("script", "pane 3", now()).unwrap(); // renews
+        let text = toml::to_string(&p).unwrap();
+        assert_eq!(toml::from_str::<Project>(&text).unwrap(), p);
+        p.submit("script", out(), None, Via::Cli, now()).unwrap();
+        assert!(p.step("script").unwrap().claim.is_none());
+        assert!(!p.ready("script")); // in review
+        p.redo("script", "x", Via::Cli, now()).unwrap();
+        p.claim("script", "pane 4", now()).unwrap();
+        p.unclaim("script").unwrap();
+        assert!(p.step("script").unwrap().claim.is_none());
+        assert!(p.unclaim("nope").is_err());
     }
 
     #[test]
