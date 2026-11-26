@@ -13,6 +13,7 @@ use crate::niche;
 use crate::project::{Kind, NoteState, Output, Project, Result, State, Via};
 use crate::rounds;
 use crate::scan;
+use crate::schedule;
 use crate::sheet;
 use crate::store::{self, PROJECT_FILE};
 use crate::upload;
@@ -395,6 +396,16 @@ pub const OPS: &[Op] = &[
             ),
         ],
         run: |a, _| scan::topic_pick(a),
+    },
+    Op {
+        name: "scan_time",
+        help: "Show, set or clear the time the scan runs each day. A time such as 07:30 writes a launchd agent in ~/Library/LaunchAgents that runs `mockingbird-studio scan` then, and logs to scan.log in the studio's home. An empty time removes the agent. With no time, shows the schedule and who set it. There is one schedule per Mac user: setting it with another MOCKINGBIRD_STUDIO_HOME replaces it.",
+        args: &[opt(
+            "time",
+            Text,
+            "HH:MM in 24-hour local time, such as 07:30. Empty clears the schedule.",
+        )],
+        run: schedule::scan_time,
     },
 ];
 
@@ -1003,10 +1014,16 @@ mod tests {
                 "scan",
                 "topics",
                 "topics_set",
-                "topic_pick"
+                "topic_pick",
+                "scan_time"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
+        // [scan] command runs a program; only the person's own edit sets it.
+        assert!(
+            OPS.iter()
+                .all(|o| o.args.iter().all(|a| a.name != "command"))
+        );
     }
 
     #[test]

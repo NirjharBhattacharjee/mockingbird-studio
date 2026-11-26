@@ -47,6 +47,15 @@
       <button type="submit">Add niche</button>
     </form>
     <p id="settings-error" role="alert"></p>
+    <h1>Scan</h1>
+    <p class="hint">The time the scan runs each day, while you're logged in. A time missed while the Mac slept runs when it wakes. Leave it empty for no schedule.</p>
+    <form id="scan-form">
+      <label for="scan-time">Time</label>
+      <input id="scan-time" type="time">
+      <button type="submit">Save</button>
+    </form>
+    <p id="scan-status"></p>
+    <p id="scan-error" role="alert"></p>
     <h1>YouTube</h1>
     <p class="hint">Sign in with the OAuth client from your own Google Cloud project (docs/YOUTUBE.md). Google's page opens in your browser.</p>
     <ul id="channels"></ul>

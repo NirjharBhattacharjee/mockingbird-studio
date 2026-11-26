@@ -614,8 +614,29 @@ function setSettingsPage(open) {
     $("settings-error").textContent = "";
     refreshNiches();
     refreshChannels();
+    scanTime();
   }
 }
+
+// The scan's daily time: `scan_time` with no time shows it, a time sets it,
+// an empty one clears it.
+async function scanTime(args = {}) {
+  $("scan-error").textContent = "";
+  try {
+    const s = await op("scan_time", args);
+    $("scan-time").value = s.time ?? "";
+    $("scan-status").textContent = !s.time ? "No schedule."
+      : s.installed ? `The scan runs at ${s.time} each day${s.set_by === "mcp" ? " (set by your agent)" : ""}. Its log is ${s.log}.`
+      : `The time is ${s.time}, but its launchd agent is missing. Save the time again.`;
+    if (s.warning) $("scan-error").textContent = s.warning;
+  } catch (e) {
+    $("scan-error").textContent = String(e);
+  }
+}
+$("scan-form").onsubmit = (e) => {
+  e.preventDefault();
+  scanTime({ time: $("scan-time").value });
+};
 
 // Runs one niche operation, then redraws. A refused change shows its reason;
 // the page then shows what is stored, except text typed and not yet saved.
