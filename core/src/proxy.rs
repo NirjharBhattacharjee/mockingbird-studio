@@ -222,6 +222,8 @@ pub fn queue_all(
             Ok(Some(job)) => json!(job),
             Ok(None) => json!({"path": o.path, "proxy": "up to date"}),
             Err(e) => {
+                // Kept on the output so the window can say why there's no copy.
+                o.rest.insert("proxy_error".into(), e.clone().into());
                 lines.push(json!({"path": o.path, "error": e}));
                 continue;
             }

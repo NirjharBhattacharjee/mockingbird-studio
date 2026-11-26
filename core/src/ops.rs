@@ -650,12 +650,13 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    if let Some(json) = a.opt("segments") {
-        add_segments(&dir, &mut outputs, &json)?;
-    }
     // Before the lock: ffprobe takes a moment per file.
     let mut warnings = vec![];
     let need = crate::proxy::probe(&dir, &mut outputs, &mut warnings);
+    // After the probe, so segments are checked against each file's length.
+    if let Some(json) = a.opt("segments") {
+        add_segments(&dir, &mut outputs, &json)?;
+    }
     let mut proxy_jobs = vec![];
     let step = a.text("step");
     let paths: Vec<String> = outputs.iter().map(|o| o.path.clone()).collect();
@@ -695,12 +696,19 @@ struct Segment {
 }
 
 /// Puts each file's segments on its output, after checking that the file is
-/// one of this round's audio or video files and each segment runs forward.
+/// one of this round's audio or video files, has one list, and each segment
+/// runs forward and ends by the file's length when that's known.
 fn add_segments(dir: &Path, outputs: &mut [Output], json: &str) -> Result<()> {
+    // Slack for a length that ffprobe reads a little short.
+    const SLACK: f64 = 0.5;
     let map: std::collections::BTreeMap<String, Vec<Segment>> =
         serde_json::from_str(json).map_err(|e| format!("segments: {e}"))?;
+    let mut seen = std::collections::BTreeSet::new();
     for (file, segments) in map {
         let path = inside(dir, &file)?;
+        if !seen.insert(path.clone()) {
+            return Err(format!("two segment lists for {path:?}"));
+        }
         let o = outputs
             .iter_mut()
             .find(|o| o.path == path)
@@ -715,6 +723,14 @@ fn add_segments(dir: &Path, outputs: &mut [Output], json: &str) -> Result<()> {
             return Err(format!(
                 "segment {:?} in {file:?} should have 0 <= from < to",
                 s.label
+            ));
+        }
+        if let Some(d) = o.rest.get("duration").and_then(toml::Value::as_float)
+            && let Some(s) = segments.iter().find(|s| s.to > d + SLACK)
+        {
+            return Err(format!(
+                "segment {:?} in {file:?} ends at {} s, after the file's {d} s",
+                s.label, s.to
             ));
         }
         let v = toml::Value::try_from(&segments).map_err(|e| e.to_string())?;
@@ -1235,6 +1251,10 @@ mod tests {
                 "missing field",
             ),
             ("[]", "segments:"),
+            (
+                r#"{"research/a.mp4": [], "./research/a.mp4": []}"#,
+                "two segment lists",
+            ),
         ] {
             let err = submit(bad).unwrap_err();
             assert!(err.contains(says), "{bad}: {err}");
@@ -1247,6 +1267,21 @@ mod tests {
             json!([{"label": "Cold open", "from": 0.0, "to": 2.5}])
         );
         assert!(step["output"][1].get("segments").is_none());
+    }
+
+    #[test]
+    fn segments_end_by_the_files_length() {
+        let t = tempfile::tempdir().unwrap();
+        fs::write(t.path().join("a.mp4"), "x").unwrap();
+        let mut outs = [Output {
+            path: "a.mp4".into(),
+            kind: Kind::Video,
+            rest: toml::Table::from_iter([("duration".to_string(), 10.0.into())]),
+        }];
+        let seg = |to: f64| format!(r#"{{"a.mp4": [{{"label": "x", "from": 0, "to": {to}}}]}}"#);
+        add_segments(t.path(), &mut outs, &seg(10.4)).unwrap();
+        let err = add_segments(t.path(), &mut outs, &seg(10.6)).unwrap_err();
+        assert!(err.contains("after the file's 10 s"), "{err}");
     }
 
     #[test]

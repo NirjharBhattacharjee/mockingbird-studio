@@ -98,14 +98,23 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   top: 0;
   bottom: 0;
   border-left: 2px solid var(--soft);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+#timeline .segment button {
+  pointer-events: auto;
+  display: block;
+  max-width: 100%;
+  border: 0;
+  background: none;
   padding: 2px 4px;
   font-size: 11px;
   color: var(--soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  box-sizing: border-box;
 }
+#timeline .segment button:hover { color: inherit; }
 #timeline .pin {
   position: absolute;
   bottom: 2px;
