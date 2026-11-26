@@ -735,13 +735,16 @@ feeds = ["https://example.com/feed.xml"]
   `~/.mockingbird-studio/workflows/`. A project copies its template when
   it's made, so editing a template doesn't change old projects.
 - A template file is `[[step]]` tables with `id`, `gate` and `after`. Each
-  `after` names a step listed above it, so there's no loop. `workflows`
+  `after` names a step listed above it, so there's no loop. A key it
+  doesn't know, such as a typo, is refused. An `upload` step has to be a
+  gate, and the template needs `thumbnail` and `description`. `workflows`
   lists every template, and a file that doesn't load shows its error.
 - `short` is `explainer` without `film`: `shorts` comes after `previews`
   and `sound`, `description` after `shorts`, and `upload` after `shorts`,
   `thumbnail` and `description`.
-- `project_new` with a niche and no workflow uses the niche's workflow, then
-  `explainer`. A niche's workflow has to load when it's set.
+- `project_new` refuses a niche that isn't in the config and stores the
+  niche's id. With no workflow it uses the niche's, then `explainer`. A
+  niche's workflow has to load when it's set.
 - `status` lists the steps that can be worked on now, which is every step
   whose `after` is satisfied. That replaces the brief written by hand for
   each pane.

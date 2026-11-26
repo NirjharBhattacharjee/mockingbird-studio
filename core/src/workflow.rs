@@ -15,6 +15,7 @@ use crate::project::Result;
 use crate::store;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Step {
     pub id: String,
     pub gate: bool,
@@ -22,7 +23,8 @@ pub struct Step {
     pub after: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
 struct File {
     #[serde(default)]
     step: Vec<Step>,
@@ -109,7 +111,8 @@ pub fn load(name: &str) -> Result<Vec<Step>> {
 }
 
 /// At least one step, plain unique ids, and each `after` names a step
-/// listed before it, so there's no loop.
+/// listed before it, so there's no loop. An `upload` step is a gate, and
+/// needs the `thumbnail` and `description` steps it posts with.
 fn check(steps: &[Step]) -> Result<()> {
     if steps.is_empty() {
         return Err("a workflow needs at least one [[step]]".into());
@@ -130,6 +133,19 @@ fn check(steps: &[Step]) -> Result<()> {
         }
         if !seen.insert(s.id.as_str()) {
             return Err(format!("step {:?} is listed twice", s.id));
+        }
+    }
+    if let Some(u) = steps.iter().find(|s| s.id == "upload") {
+        if !u.gate {
+            return Err("the upload step posts when approved, so it needs gate = true".into());
+        }
+        if let Some(m) = ["thumbnail", "description"]
+            .into_iter()
+            .find(|m| !seen.contains(m))
+        {
+            return Err(format!(
+                "a workflow with an upload step needs a {m} step, which the post uses"
+            ));
         }
     }
     Ok(())
@@ -188,6 +204,42 @@ mod tests {
         assert!(check(&[st("a", &[]), st("a", &[])]).is_err());
         assert!(check(&[st("a", &["a"])]).is_err());
         check(&[st("a", &[]), st("b", &["a"])]).unwrap();
+    }
+
+    #[test]
+    fn upload_is_a_gate_with_a_thumbnail_and_a_description() {
+        let st = |id: &str, gate: bool| Step {
+            id: id.into(),
+            gate,
+            after: vec![],
+        };
+        check(&[
+            st("thumbnail", true),
+            st("description", true),
+            st("upload", true),
+        ])
+        .unwrap();
+        let e = check(&[
+            st("thumbnail", true),
+            st("description", true),
+            st("upload", false),
+        ])
+        .unwrap_err();
+        assert!(e.contains("gate = true"), "{e}");
+        let e = check(&[st("thumbnail", true), st("upload", true)]).unwrap_err();
+        assert!(e.contains("description"), "{e}");
+        let e = check(&[st("description", true), st("upload", true)]).unwrap_err();
+        assert!(e.contains("thumbnail"), "{e}");
+    }
+
+    #[test]
+    fn a_typo_in_a_template_is_refused() {
+        let e = toml::from_str::<File>("[[step]]\nid = \"a\"\ngate = true\nafer = []\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("afer"), "{e}");
+        assert!(toml::from_str::<File>("steps = []\n").is_err());
+        toml::from_str::<File>("[[step]]\nid = \"a\"\ngate = true\nafter = []\n").unwrap();
     }
 
     #[test]

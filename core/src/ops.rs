@@ -595,17 +595,16 @@ pub(crate) fn new_project(
             "{shown} already has files in it; pick a new or empty folder, or use project_add"
         ));
     }
-    let workflow = match (workflow, &niche) {
-        (Some(w), _) => w,
-        (None, Some(n)) => {
-            let c = store::read_config()?;
-            niche::find(&c.niche, n)
-                .ok()
-                .and_then(|i| c.niche[i].workflow.clone())
-                .unwrap_or_else(|| "explainer".into())
+    // The niche is stored by its id, and its workflow is the default.
+    let (niche, default) = match niche {
+        Some(n) => {
+            let mut c = store::read_config()?;
+            let n = c.niche.swap_remove(niche::find(&c.niche, &n)?);
+            (Some(n.id), n.workflow)
         }
-        (None, None) => "explainer".into(),
+        None => (None, None),
     };
+    let workflow = workflow.or(default).unwrap_or_else(|| "explainer".into());
     let project = Project::new(title, niche, &workflow, Timestamp::now())?;
     let io = |e: std::io::Error| format!("can't make {}: {e}", dir.display());
     fs::create_dir_all(dir).map_err(io)?;
@@ -1168,11 +1167,19 @@ mod tests {
         )
         .unwrap();
         let dir = t.path().join("a-short");
+        let e = run(
+            "project_new",
+            json!({"dir": t.path().join("c"), "title": "C", "niche": "nobody"}),
+        )
+        .unwrap_err();
+        assert!(e.contains("no niche"), "{e}");
+        // By name, the niche is stored as its id.
         let r = run(
             "project_new",
-            json!({"dir": dir, "title": "S", "niche": "shorts-only"}),
+            json!({"dir": dir, "title": "S", "niche": "SHORTS ONLY"}),
         )
         .unwrap();
+        assert_eq!(r["niche"], "shorts-only");
         assert_eq!(r["workflow"], "short");
         let ids: Vec<_> = r["steps"]
             .as_array()
