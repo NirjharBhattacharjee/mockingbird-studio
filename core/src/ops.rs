@@ -26,6 +26,7 @@ pub enum ArgKind {
     TextList,
     /// A list of JSON objects. On the command line, one JSON list.
     Objects,
+    Flag,
 }
 
 pub struct Arg {
@@ -167,7 +168,7 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "approve",
-        help: "Approve a step in review. Written to project.toml with the time.",
+        help: "Approve a step in review. Written to project.toml with the time. Approving the upload step queues the youtube job when the project has no post yet and its channel is signed in; an approval through MCP posts private.",
         args: &[PROJECT, STEP, opt("note", Text, "The words of the yes.")],
         run: approve,
     },
@@ -210,6 +211,11 @@ pub const OPS: &[Op] = &[
                 "step",
                 Text,
                 "The step it builds. Refused under the same rule as submit.",
+            ),
+            opt(
+                "again",
+                Flag,
+                "For kind youtube: post a project that's already posted, once more. Only when the person asked for a second post. Through MCP, a second post goes up private.",
             ),
         ],
         run: job_start,
@@ -421,6 +427,7 @@ pub fn dispatch(name: &str, args: &Value, via: Via) -> Result<Value> {
             Objects => value
                 .as_array()
                 .is_some_and(|a| a.iter().all(Value::is_object)),
+            Flag => value.is_boolean(),
         };
         if !ok {
             return Err(format!("{name}: {key} should be {:?}", arg.kind));
@@ -453,6 +460,9 @@ impl Args<'_> {
             .get(key)
             .and_then(Value::as_array)
             .map_or(&[], Vec::as_slice)
+    }
+    fn flag(&self, key: &str) -> bool {
+        self.0.get(key).and_then(Value::as_bool).unwrap_or_default()
     }
     fn number(&self, key: &str) -> Option<f64> {
         self.0.get(key).and_then(Value::as_f64)
@@ -622,6 +632,7 @@ pub(crate) fn status_of(dir: &Path) -> Result<Value> {
         .collect();
     let jobs = jobs::list(Some(dir));
     jobs::wake(&jobs);
+    let upload = p.step("upload").is_ok().then(|| upload::status(&p, &jobs));
     Ok(json!({
         "project": dir,
         "title": p.title,
@@ -631,6 +642,7 @@ pub(crate) fn status_of(dir: &Path) -> Result<Value> {
         "steps": steps,
         "open_notes": open,
         "jobs": jobs,
+        "upload": upload,
     }))
 }
 
@@ -661,12 +673,20 @@ fn submit(a: &Args, via: Via) -> Result<Value> {
     let step = a.text("step");
     let paths: Vec<String> = outputs.iter().map(|o| o.path.clone()).collect();
     let mut v = store::update_project(&dir, |p| {
+        if step == "upload" {
+            upload::check_idle(p)?;
+        }
         p.submit(&step, outputs, a.opt("summary"), via, Timestamp::now())?;
         // After the gate check, so a gate refusal comes first. An Err here
         // writes nothing. A match so the next step's checks are one more arm.
         match step.as_str() {
             "thumbnail" => crate::thumbnail::check(&dir, &paths)?,
             "description" => sheet::check_submit(&dir, &paths)?,
+            "upload" => {
+                if !matches!(&p.step(&step)?.outputs[..], [o] if o.kind == Kind::Video) {
+                    return Err("the upload step takes exactly one file: the video to post".into());
+                }
+            }
             _ => {}
         }
         let s = p.step(&step)?;
@@ -788,27 +808,43 @@ fn note_done(a: &Args, _: Via) -> Result<Value> {
     })
 }
 
+/// The decision is written first. On the upload step it then queues the
+/// youtube job, which claims the post before sending anything, so this and
+/// a job_start can't post twice. It never posts again on its own.
 fn approve(a: &Args, via: Via) -> Result<Value> {
     let step = a.text("step");
-    store::update_project(&a.project()?, |p| {
+    let dir = a.project()?;
+    let (mut v, unposted) = store::update_project(&dir, |p| {
         p.approve(&step, a.opt("note"), via, Timestamp::now())?;
-        Ok(json!(p.last_decision(&step)))
-    })
+        Ok((json!(p.last_decision(&step)), p.posts.is_empty()))
+    })?;
+    if step == "upload" && unposted {
+        match upload::start(dir, false, false) {
+            Ok(job) => v["youtube_job"] = json!(job),
+            Err(e) => v["not_posted"] = e.into(),
+        }
+    }
+    Ok(v)
 }
 
 fn redo(a: &Args, via: Via) -> Result<Value> {
     let step = a.text("step");
     store::update_project(&a.project()?, |p| {
+        if step == "upload" {
+            upload::check_idle(p)?;
+        }
         p.redo(&step, &a.text("note"), via, Timestamp::now())?;
         Ok(json!(p.last_decision(&step)))
     })
 }
 
-fn job_start(a: &Args, _: Via) -> Result<Value> {
+fn job_start(a: &Args, via: Via) -> Result<Value> {
     let kind = a.text("kind");
     if kind == "youtube" {
         let dir = a.opt("project").ok_or("a youtube job needs its project")?;
-        return Ok(json!(upload::start(project_dir(&dir)?)?));
+        let again = a.flag("again");
+        let private = again && via == Via::Mcp;
+        return Ok(json!(upload::start(project_dir(&dir)?, again, private)?));
     }
     if kind != "tool" && kind != "mockingbird" {
         return Err(format!(

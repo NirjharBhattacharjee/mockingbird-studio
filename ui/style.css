@@ -68,7 +68,7 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 #preview.thumb { flex-direction: column; gap: 16px; padding: 16px; align-items: flex-start; }
 #preview.thumb > img { width: 1280px; max-width: 100%; max-height: none; height: auto; margin: 0; }
 .feed { display: flex; gap: 10px; align-items: flex-start; max-width: 360px; font-weight: 600; }
-#preview .feed img { flex: none; width: 168px; height: 94px; border-radius: 6px; margin: 0; }
+:is(#preview, #upload) .feed img { flex: none; width: 168px; height: 94px; border-radius: 6px; margin: 0; }
 #preview audio { margin: auto; width: 90%; }
 #preview embed { flex: 1; }
 #preview p { margin: auto; color: var(--soft); }
@@ -134,6 +134,16 @@ main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 #approve:not(:disabled) { background: var(--accent); border-color: var(--accent); color: white; }
 
 #error, .error { color: #d70015; margin: 0; }
+#upload { display: grid; grid-template-columns: minmax(240px, 1fr) 2fr; gap: 16px; max-height: 40vh; }
+#upload .facts { display: flex; flex-direction: column; gap: 8px; overflow: hidden auto; }
+#upload > * { min-width: 0; }
+#upload .upload-sheet { overflow: hidden auto; }
+#upload .upload-sheet pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#upload p { margin: 0; }
+#upload .hint { color: var(--soft); }
+#upload .warn { color: #b25000; }
+#upload .posted code { user-select: all; overflow-wrap: anywhere; }
+#upload .sheet { padding: 0; }
 
 #notes li { padding: 8px 0; border-bottom: 1px solid var(--line); }
 #notes li::before { content: "● "; color: var(--accent); }
@@ -173,11 +183,11 @@ dialog .actions { justify-content: flex-end; }
 .sheet-head button { margin-left: auto; padding: 1px 8px; }
 .sheet .count, .sheet .over { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--soft); }
 .sheet .over { color: #d70015; }
-#preview .sheet p { margin: 4px 0; color: inherit; }
-#preview .sheet > p:first-of-type { font-size: 17px; font-weight: 600; }
-#preview .sheet pre { padding: 0; margin: 4px 0; font: inherit; }
-#preview .sheet .declarations { margin-top: 16px; color: var(--soft); }
-#preview .sheet .error { color: #d70015; margin-bottom: 12px; }
+:is(#preview, #upload) .sheet p { margin: 4px 0; color: inherit; }
+:is(#preview, #upload) .sheet > p:first-of-type { font-size: 17px; font-weight: 600; }
+:is(#preview, #upload) .sheet pre { padding: 0; margin: 4px 0; font: inherit; }
+:is(#preview, #upload) .sheet .declarations { margin-top: 16px; color: var(--soft); }
+:is(#preview, #upload) .sheet .error { color: #d70015; margin-bottom: 12px; }
 
 #jobs-button { width: 100%; margin-bottom: 16px; }
 #jobs-button[aria-pressed="true"] { border-color: var(--accent); }

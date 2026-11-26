@@ -21,6 +21,7 @@ let shown = ""; // what the page last drew, to skip redraws that change nothing
 let previewKey = ""; // the file in the preview, so a refresh doesn't reload a playing video
 let pinned = null; // the player's time when `n` was pressed
 let asked = 0; // the latest refresh; an older reply is dropped
+let uploadKey = ""; // what the posting panel last drew
 
 const op = (name, args = {}) => invoke("op", { name, args });
 
@@ -131,6 +132,57 @@ function drawStep() {
   }
   drawPreview(s?.output?.find((o) => o.path === sel.file), s?.round);
   drawTimeline(s);
+  drawUpload(s);
+}
+
+// The upload step: what goes up and where, then what Google did with it.
+function drawUpload(s) {
+  const u = s?.id === "upload" ? status?.upload : null;
+  const box = $("upload");
+  box.hidden = !u;
+  const posted = u?.posts.some((p) => !p.state);
+  $("approve").textContent = u?.signed_in && !posted ? "Approve and post" : "Approve";
+  const thumb = status?.steps.find((t) => t.id === "thumbnail")?.output?.find((o) => o.kind === "image");
+  const key = u ? JSON.stringify([sel.project, s.round, u, thumb]) : "";
+  if (key === uploadKey) return;
+  uploadKey = key;
+  box.replaceChildren();
+  if (!u) return;
+  const facts = el("div", null, { class: "facts" });
+  box.append(facts);
+  const line = (text, cls = "hint") => facts.append(el("p", text, { class: cls }));
+
+  for (const p of u.posts) {
+    if (p.state) {
+      line(p.live ? `Uploading to ${p.channel}…` : `Stopped: an upload to ${p.channel} didn't finish.`, p.live ? "hint" : "warn");
+      continue;
+    }
+    const posted = el("p", `Posted to ${p.channel} as ${p.visibility_set}, ${new Date(p.at).toLocaleString()}: `, { class: "posted" });
+    const copy = el("button", "Copy link", { type: "button" });
+    copy.onclick = () => navigator.clipboard.writeText(p.url).catch(showError);
+    posted.append(el("code", p.url), " ", copy);
+    facts.append(posted);
+    if (p.visibility_set !== p.visibility_asked) {
+      line(`Google set it to ${p.visibility_set}, not ${p.visibility_asked}. YouTube locks videos from an API project that hasn't passed its audit to private.`, "warn");
+    }
+    if (p.thumbnail === "refused") line("YouTube refused the thumbnail. Custom thumbnails need a verified channel.", "warn");
+    if (p.thumbnail === "failed") line("The thumbnail wasn't set. The job's log says why.", "warn");
+  }
+  if (u.waiting) line(u.waiting, "warn");
+
+  if (u.channel && !posted) {
+    line(`Goes to ${u.channel} as ${u.visibility}. An approval through your agent posts private.`);
+  }
+  if (u.error && !u.waiting) line(u.error, "warn");
+  if (thumb) {
+    const feed = el("div", null, { class: "feed" });
+    const title = el("span", status.title);
+    feed.append(el("img", null, { src: `${convertFileSrc(`${status.project}/${thumb.path}`)}?r=${s.round}`, alt: "The thumbnail", width: 168, height: 94 }), title);
+    facts.append(feed);
+    const sheet = el("div", null, { class: "upload-sheet" });
+    box.append(sheet);
+    drawSheet(sheet).then((got) => got && (title.textContent = got.title));
+  }
 }
 
 // The step's audio and video outputs in order, each as wide as its length,
@@ -310,6 +362,7 @@ async function drawSheet(box) {
     el("p", `Category ${s.category} · made for kids: ${yes(s.made_for_kids)} · altered or synthetic content: ${yes(s.altered_content)}`, { class: "declarations" }),
   );
   box.replaceChildren(sheet);
+  return s;
 }
 
 function drawNotes() {

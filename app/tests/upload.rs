@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod common;
+
 const BIN: &str = env!("CARGO_BIN_EXE_mockingbird-studio");
 const ACCESS: &str = "ya29.upload-access-token-never-shown";
 const REFRESH: &str = "1//upload-refresh-token-never-shown";
@@ -40,6 +42,8 @@ struct Fake {
     thumbnail: Vec<u8>,
     paths: Vec<String>,
     inserts: u32,
+    /// Content-Range of each PUT to an earlier job's session, `upload_id=old`.
+    old: Vec<String>,
 }
 
 struct Request {
@@ -108,6 +112,12 @@ fn handle(s: TcpStream, fake: &Mutex<Fake>) {
     }
     let mut body = vec![0; len];
     r.read_exact(&mut body).unwrap();
+    // An earlier job's session that never finished.
+    if req.path.contains("upload_id=old") {
+        f.old.push(req.headers["content-range"].clone());
+        reply(&s, "308 Resume Incomplete", "", "");
+        return;
+    }
     match (req.method.as_str(), path.as_str()) {
         ("POST", "/token") => {
             let form: HashMap<String, String> =
@@ -131,6 +141,7 @@ fn handle(s: TcpStream, fake: &Mutex<Fake>) {
                 return;
             }
             f.inserts += 1;
+            f.got.clear();
             f.meta = serde_json::from_slice(&body).unwrap();
             let at = format!(
                 "Location: {}/upload/youtube/v3/videos?uploadType=resumable&upload_id=s1\r\n",
@@ -630,6 +641,19 @@ fn a_live_claim_stops_a_second_run() {
     assert!(!ok && out.contains("already uploading"), "{out}");
     let (ok, out) = w.upload();
     assert!(!ok && out.contains("already uploading"), "{out}");
+    // Nor can the step change under it.
+    let (ok, out) = w.cli(&["redo", "--project", dir, "--step", "upload", "--note", "x"]);
+    assert!(!ok && out.contains("uploading this project now"), "{out}");
+    let (ok, out) = w.cli(&[
+        "submit",
+        "--project",
+        dir,
+        "--step",
+        "upload",
+        "--files",
+        "upload/film.mp4",
+    ]);
+    assert!(!ok && out.contains("uploading this project now"), "{out}");
     assert!(w.fake.lock().unwrap().paths.is_empty());
 }
 
@@ -640,4 +664,223 @@ fn chunks_that_google_never_takes_give_up_after_five() {
     assert!(!ok);
     assert!(out.contains("broke 5 times in a row at byte 0"), "{out}");
     assert_eq!(out.matches("the upload broke at byte").count(), 4, "{out}");
+}
+
+impl World {
+    /// The film, thumbnail and description approved, and the upload step
+    /// waiting for its review.
+    fn in_review(&self) {
+        let p = self
+            .project_toml()
+            .replace(
+                "[[step]]\nid = \"thumbnail\"",
+                "[[step]]\nid = \"film\"\ngate = true\nstate = \"approved\"\nround = 1\n[[step.output]]\npath = \"upload/film.mp4\"\nkind = \"video\"\n\n[[step]]\nid = \"thumbnail\"",
+            )
+            .replace(
+                "after = [\"thumbnail\", \"description\"]\nstate = \"approved\"",
+                "after = [\"film\", \"thumbnail\", \"description\"]\nstate = \"review\"",
+            )
+            .replace(
+                "step = \"upload\"\nround = 1\ndecision = \"approved\"\nat = \"2026-11-26T10:00:00Z\"",
+                "step = \"film\"\nround = 1\ndecision = \"approved\"\nat = \"2026-11-26T09:20:00Z\"",
+            );
+        assert!(
+            p.contains("id = \"film\"") && p.contains("\"review\""),
+            "{p}"
+        );
+        std::fs::write(self.project.join("project.toml"), p).unwrap();
+    }
+
+    fn status(&self) -> Value {
+        let (ok, out) = self.cli(&["status", "--project", self.project.to_str().unwrap()]);
+        assert!(ok, "{out}");
+        serde_json::from_str(&out).unwrap()
+    }
+}
+
+#[test]
+fn approving_the_upload_step_posts_once_and_again_only_when_asked() {
+    let w = World::new(|_| {});
+    w.in_review();
+    let dir = w.project.to_str().unwrap();
+    let u = &w.status()["upload"];
+    assert_eq!(u["channel"], "main");
+    assert_eq!(u["visibility"], "public");
+    assert_eq!(u["signed_in"], true);
+
+    let (ok, out) = w.cli(&["approve", "--project", dir, "--step", "upload"]);
+    assert!(ok, "{out}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["youtube_job"]["kind"], "youtube", "{v}");
+    let jobs = w.jobs_end();
+    assert_eq!(jobs[0]["state"], "done", "{jobs:?}");
+    let p = w.project_toml();
+    assert_eq!(p.matches("[[post]]").count(), 1, "{p}");
+    assert!(p.contains("visibility_asked = \"public\""), "{p}");
+    let u = &w.status()["upload"];
+    assert_eq!(u["posts"][0]["url"], "https://youtu.be/vid_123-A", "{u}");
+    assert!(u["waiting"].is_null(), "{u}");
+
+    // Two files, or no video, are refused; one video is a new round.
+    let (ok, out) = w.cli(&[
+        "submit",
+        "--project",
+        dir,
+        "--step",
+        "upload",
+        "--files",
+        "upload/film.mp4",
+        "thumbnail/thumbnail.png",
+    ]);
+    assert!(!ok && out.contains("exactly one file"), "{out}");
+    let (ok, out) = w.cli(&[
+        "submit",
+        "--project",
+        dir,
+        "--step",
+        "upload",
+        "--files",
+        "upload/film.mp4",
+    ]);
+    assert!(ok, "{out}");
+    let (ok, out) = w.cli(&["approve", "--project", dir, "--step", "upload"]);
+    assert!(ok, "{out}");
+    assert!(
+        !out.contains("youtube_job"),
+        "a second approval queues nothing: {out}"
+    );
+    w.jobs_end();
+    assert_eq!(w.fake.lock().unwrap().inserts, 1, "no second upload");
+
+    let (ok, out) = w.cli(&["job-start", "--kind", "youtube", "--project", dir]);
+    assert!(!ok && out.contains("already posted"), "{out}");
+    let (ok, out) = w.cli(&[
+        "job-start",
+        "--kind",
+        "youtube",
+        "--project",
+        dir,
+        "--again",
+    ]);
+    assert!(ok, "{out}");
+    assert!(out.contains("--again"), "{out}");
+    w.jobs_end();
+    assert_eq!(w.fake.lock().unwrap().inserts, 2);
+    assert_eq!(w.project_toml().matches("[[post]]").count(), 2);
+
+    // Through MCP, a second post goes up private.
+    let (v, _) = w.mcp().call(
+        "job_start",
+        json!({"kind": "youtube", "project": w.project, "again": true}),
+    );
+    assert!(v["command"].to_string().contains("--private"), "{v}");
+    w.jobs_end();
+    let f = w.fake.lock().unwrap();
+    assert_eq!(f.inserts, 3);
+    assert_eq!(f.meta["status"]["privacyStatus"], "private");
+}
+
+#[test]
+fn an_mcp_approval_on_a_public_niche_asks_for_private() {
+    let w = World::new(|_| {});
+    w.in_review();
+    let (v, _) = w.mcp().call(
+        "approve",
+        json!({"project": w.project, "step": "upload", "note": "yes, post it"}),
+    );
+    assert_eq!(v["via"], "mcp", "{v}");
+    assert_eq!(v["youtube_job"]["kind"], "youtube", "{v}");
+    let jobs = w.jobs_end();
+    assert_eq!(jobs[0]["state"], "done", "{jobs:?}");
+    assert_eq!(
+        w.fake.lock().unwrap().meta["status"]["privacyStatus"],
+        "private"
+    );
+    let p = w.project_toml();
+    assert!(p.contains("visibility_asked = \"private\""), "{p}");
+}
+
+#[test]
+fn an_approval_with_no_channel_signed_in_posts_nothing_and_status_says_why() {
+    let w = World::new(|_| {});
+    w.in_review();
+    // Signed out: no Keychain item, and no [[channel]] in config.toml.
+    std::fs::remove_file(w.keychain.path().join("main")).unwrap();
+    let config = w.home.path().join("config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(&config, text.replace("[[channel]]\nlabel = \"main\"\n", "")).unwrap();
+    let dir = w.project.to_str().unwrap();
+    let (ok, out) = w.cli(&["approve", "--project", dir, "--step", "upload"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("main isn't signed in"), "{out}");
+    assert!(w.jobs_end().is_empty());
+    let u = &w.status()["upload"];
+    assert!(
+        u["waiting"].as_str().unwrap().contains("youtube_connect"),
+        "{u}"
+    );
+    assert!(w.fake.lock().unwrap().paths.is_empty());
+}
+
+impl World {
+    /// An MCP server for this world.
+    fn mcp(&self) -> common::Client {
+        let base = self.fake.lock().unwrap().base.clone();
+        common::Client::start_env(
+            self.home.path(),
+            &[
+                (
+                    "MOCKINGBIRD_STUDIO_KEYCHAIN_DIR",
+                    self.keychain.path().to_str().unwrap(),
+                ),
+                ("MOCKINGBIRD_STUDIO_GOOGLE", &base),
+            ],
+        )
+    }
+}
+
+#[test]
+fn a_dead_claim_from_an_earlier_round_is_asked_once_and_never_sent_to() {
+    let w = World::new(|_| {});
+    let p = w
+        .project_toml()
+        .replace(
+            "state = \"approved\"\nround = 1\n[[step.output]]\npath = \"upload/film.mp4\"",
+            "state = \"approved\"\nround = 2\n[[step.output]]\npath = \"upload/film.mp4\"",
+        )
+        .replace(
+            "step = \"upload\"\nround = 1\ndecision = \"approved\"\nat = \"2026-11-26T10:00:00Z\"\nvia = \"window\"",
+            "step = \"upload\"\nround = 2\ndecision = \"approved\"\nat = \"2026-11-26T10:00:00Z\"\nvia = \"mcp\"",
+        );
+    assert!(
+        p.contains("round = 2") && p.contains("via = \"mcp\""),
+        "{p}"
+    );
+    let base = w.fake.lock().unwrap().base.clone();
+    let claim = format!(
+        "\n[[post]]\nstep = \"upload\"\nround = 1\nat = \"{}\"\njob = \"20261126-090000-dead\"\nstate = \"uploading\"\nsession = \"{base}/upload/youtube/v3/videos?uploadType=resumable&upload_id=old\"\nfile = \"upload/film.mp4\"\nsize = {FILM}\nchannel = \"main\"\nvisibility_asked = \"public\"\n",
+        jiff::Timestamp::now()
+    );
+    std::fs::write(w.project.join("project.toml"), p + &claim).unwrap();
+
+    let (ok, out) = w.upload();
+    assert!(ok, "{out}");
+    assert!(out.contains("whether that upload finished"), "{out}");
+    let f = w.fake.lock().unwrap();
+    assert_eq!(
+        f.old,
+        vec![format!("bytes */{FILM}")],
+        "one question, no bytes"
+    );
+    assert_eq!(f.meta["status"]["privacyStatus"], "private");
+    assert!(f.got == film());
+    drop(f);
+    let p = w.project_toml();
+    assert_eq!(p.matches("[[post]]").count(), 1, "{p}");
+    assert!(
+        p.contains("round = 2")
+            && p.contains("visibility_asked = \"private\"")
+            && !p.contains("upload_id=old"),
+        "{p}"
+    );
 }
