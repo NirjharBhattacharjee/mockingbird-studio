@@ -816,9 +816,9 @@ async function refreshToday() {
 }
 
 // A folder next to the selected project, named after the topic.
-function suggestDir(title) {
+function suggestDir(title, id) {
   const near = sel.project ?? projects.find((p) => !p.error)?.project;
-  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || `topic-${id}`;
   return near ? `${near.replace(/\/[^/]*\/?$/, "")}/${slug}` : "";
 }
 
@@ -870,7 +870,7 @@ function drawToday() {
           start.onclick = () => {
             pendingPick = { niche: nc.id, day: s.day, topic: t.id };
             $("pick-text").textContent = t.title;
-            $("pick-dir").value = suggestDir(t.title);
+            $("pick-dir").value = suggestDir(t.title, t.id);
             $("pick-dialog").returnValue = "";
             $("pick-dialog").showModal();
           };
