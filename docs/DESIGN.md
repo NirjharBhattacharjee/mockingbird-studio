@@ -714,7 +714,7 @@ feeds = ["https://example.com/feed.xml"]
   shows it too.
 - `topic_pick` makes a project from a topic with the niche's workflow.
 - The schedule is a launchd agent in `~/Library/LaunchAgents/` that runs
-  `mockingbird-studio scan --all`. It's written when you set a time and
+  `mockingbird-studio scan`. It's written when you set a time and
   removed when you clear it. launchd runs a missed time after the Mac wakes.
 - Parsing uses `feed-rs`. Fetching uses the HTTP client M3 brought in.
 

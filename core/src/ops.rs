@@ -863,6 +863,14 @@ mod tests {
                 .any(|e| e["niche"] == "scan-test")
         );
         assert!(run("topics", json!({"niche": "scan-test", "day": "2020-01-01"})).is_err());
+        // A scan file that can't be read: an error for that niche, not the call.
+        let dir = store::home().join("scans/scan-test");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-11-26.json"), "not json").unwrap();
+        let r = run("topics", json!({})).unwrap();
+        let errs = r["errors"].as_array().unwrap();
+        assert!(errs.iter().any(|e| e["niche"] == "scan-test"), "{r}");
+        assert!(run("topics", json!({"niche": "scan-test"})).is_err());
     }
 
     #[test]

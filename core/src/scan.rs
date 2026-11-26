@@ -58,13 +58,24 @@ pub struct Scan {
 
 /// One GET: a timeout, a size cap, a generic user agent, no cookies (ureq
 /// keeps none without its `cookies` feature) and no other headers of ours.
+/// A redirect is not followed: the address that was listed is the only one
+/// fetched, so a moved feed is an error that says where it went.
 fn fetch(url: &str) -> Result<Vec<u8>> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .user_agent("mockingbird-studio")
+        .max_redirects(0)
         .build()
         .into();
     let mut resp = agent.get(url).call().map_err(|e| e.to_string())?;
+    if resp.status().is_redirection() {
+        let to = resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("an address it didn't give");
+        return Err(format!("moved to {to}; update the feed"));
+    }
     resp.body_mut()
         .with_config()
         .limit(MAX_BYTES)
@@ -273,20 +284,25 @@ pub(crate) fn topics(a: &Args) -> Result<Value> {
     let c = store::read_config()?;
     let one = a.opt("niche");
     let named = one.is_some();
-    let mut scans = vec![];
+    let (mut scans, mut errors) = (vec![], vec![]);
     for n in pick(&c, one)? {
-        let dir = niche_dir(&scans_root(), &n.id)?;
-        let found = match day {
-            Some(d) => days(&dir).into_iter().find(|(x, _)| *x == d),
-            None => days(&dir).into_iter().max_by_key(|(d, _)| *d),
-        };
-        match found {
-            Some((_, p)) => scans.push(read_scan(&p)?),
-            None if named => return Err(format!("no scan of {} yet; run scan", n.id)),
-            None => {}
+        let got = niche_dir(&scans_root(), &n.id).and_then(|dir| {
+            let found = match day {
+                Some(d) => days(&dir).into_iter().find(|(x, _)| *x == d),
+                None => days(&dir).into_iter().max_by_key(|(d, _)| *d),
+            };
+            found.map(|(_, p)| read_scan(&p)).transpose()
+        });
+        match got {
+            Ok(Some(s)) => scans.push(s),
+            Ok(None) if named => return Err(format!("no scan of {} yet; run scan", n.id)),
+            Ok(None) => {}
+            // As with `scan`: one niche's bad file doesn't hide the others.
+            Err(e) if named => return Err(e),
+            Err(e) => errors.push(json!({"niche": n.id, "error": e})),
         }
     }
-    Ok(json!({"scans": scans}))
+    Ok(json!({"scans": scans, "errors": errors}))
 }
 
 #[cfg(test)]
@@ -442,13 +458,17 @@ mod tests {
     /// Serves `body` once on a loopback port and returns the address and
     /// the request the client sent.
     fn serve(body: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
+        let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+        serve_raw(head, body)
+    }
+
+    fn serve_raw(head: String, body: Vec<u8>) -> (String, std::thread::JoinHandle<String>) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/feed.xml", l.local_addr().unwrap());
         let h = std::thread::spawn(move || {
             let (mut s, _) = l.accept().unwrap();
             let mut req = vec![0; 4096];
             let n = s.read(&mut req).unwrap();
-            let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
             // The client may hang up early on a body that's too big.
             let _ = s
                 .write_all(head.as_bytes())
@@ -469,6 +489,18 @@ mod tests {
         for header in ["cookie", "authorization", "referer"] {
             assert!(!req.contains(header), "{req}");
         }
+    }
+
+    #[test]
+    fn a_redirect_is_not_followed() {
+        let head = "HTTP/1.1 301 Moved Permanently\r\nLocation: https://elsewhere.example/feed\r\nContent-Length: 0\r\n\r\n";
+        let (url, h) = serve_raw(head.into(), vec![]);
+        let e = fetch(&url).unwrap_err();
+        assert_eq!(
+            e,
+            "moved to https://elsewhere.example/feed; update the feed"
+        );
+        h.join().unwrap();
     }
 
     #[test]
