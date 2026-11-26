@@ -24,6 +24,8 @@ pub enum ArgKind {
     Number,
     Integer,
     TextList,
+    /// A list of JSON objects. On the command line, one JSON list.
+    Objects,
 }
 
 pub struct Arg {
@@ -350,6 +352,39 @@ pub const OPS: &[Op] = &[
         ],
         run: |a, _| scan::topics(a),
     },
+    Op {
+        name: "topics_set",
+        help: "Save your shortlist for a niche's latest scan, or the scan of one day, so the window shows it. Replaces the shortlist, but keeps topics already picked. Each topic is {title, why, items}, where items are links from that scan's items.",
+        args: &[
+            NICHE,
+            req(
+                "topics",
+                Objects,
+                "The topics, best first: objects with title, why, and items (links from the scan).",
+            ),
+            opt(
+                "day",
+                Text,
+                "The scan's day, such as 2026-11-26. The latest if left out.",
+            ),
+        ],
+        run: |a, _| scan::topics_set(a),
+    },
+    Op {
+        name: "topic_pick",
+        help: "Make a project from a topic on a niche's shortlist, with the niche's workflow, and mark the topic picked.",
+        args: &[
+            NICHE,
+            req("topic", Text, "The topic's id, from topics."),
+            req("dir", Text, "The new project's folder."),
+            opt(
+                "day",
+                Text,
+                "The scan's day, such as 2026-11-26. The latest if left out.",
+            ),
+        ],
+        run: |a, _| scan::topic_pick(a),
+    },
 ];
 
 /// Runs the operation `name` with JSON `args`. `via` says which layer called.
@@ -378,6 +413,9 @@ pub fn dispatch(name: &str, args: &Value, via: Via) -> Result<Value> {
             TextList => value
                 .as_array()
                 .is_some_and(|a| a.iter().all(Value::is_string)),
+            Objects => value
+                .as_array()
+                .is_some_and(|a| a.iter().all(Value::is_object)),
         };
         if !ok {
             return Err(format!("{name}: {key} should be {:?}", arg.kind));
@@ -404,6 +442,12 @@ impl Args<'_> {
     }
     pub(crate) fn text(&self, key: &str) -> String {
         self.opt(key).unwrap_or_default()
+    }
+    pub(crate) fn objects(&self, key: &str) -> &[Value] {
+        self.0
+            .get(key)
+            .and_then(Value::as_array)
+            .map_or(&[], Vec::as_slice)
     }
     fn number(&self, key: &str) -> Option<f64> {
         self.0.get(key).and_then(Value::as_f64)
@@ -485,26 +529,37 @@ fn add_to_list(dir: &Path) -> Result<()> {
 }
 
 fn project_new(a: &Args, _: Via) -> Result<Value> {
-    let dir = PathBuf::from(a.text("dir"));
+    let dir = new_project(
+        Path::new(&a.text("dir")),
+        &a.text("title"),
+        a.opt("niche"),
+        a.opt("workflow"),
+    )?;
+    status_of(&dir)
+}
+
+/// Makes the project folder, its `project.toml` and its place in the list.
+/// Returns the folder, canonical.
+pub(crate) fn new_project(
+    dir: &Path,
+    title: &str,
+    niche: Option<String>,
+    workflow: Option<String>,
+) -> Result<PathBuf> {
     if dir.join(PROJECT_FILE).exists() {
         return Err(format!("{} is already a project", dir.display()));
     }
-    let workflow = a.opt("workflow").unwrap_or_else(|| "explainer".into());
-    let project = Project::new(
-        &a.text("title"),
-        a.opt("niche"),
-        &workflow,
-        Timestamp::now(),
-    )?;
+    let workflow = workflow.unwrap_or_else(|| "explainer".into());
+    let project = Project::new(title, niche, &workflow, Timestamp::now())?;
     let io = |e: std::io::Error| format!("can't make {}: {e}", dir.display());
-    fs::create_dir_all(&dir).map_err(io)?;
-    let dir = canonical(&dir)?;
+    fs::create_dir_all(dir).map_err(io)?;
+    let dir = canonical(dir)?;
     for step in &project.steps {
         fs::create_dir_all(dir.join(&step.id)).map_err(io)?;
     }
     store::create_project(&dir, &project)?;
     add_to_list(&dir)?;
-    status_of(&dir)
+    Ok(dir)
 }
 
 fn project_add(a: &Args, _: Via) -> Result<Value> {
@@ -532,7 +587,7 @@ fn status(a: &Args, _: Via) -> Result<Value> {
     status_of(&a.project()?)
 }
 
-fn status_of(dir: &Path) -> Result<Value> {
+pub(crate) fn status_of(dir: &Path) -> Result<Value> {
     let p: Project = store::read(&dir.join(PROJECT_FILE))?;
     let steps: Vec<Value> = p
         .steps
@@ -837,7 +892,9 @@ mod tests {
                 "youtube_status",
                 "youtube_disconnect",
                 "scan",
-                "topics"
+                "topics",
+                "topics_set",
+                "topic_pick"
             ]
         );
         assert!(OPS.iter().all(|o| o.args.iter().all(|a| a.name != "via")));
@@ -872,6 +929,80 @@ mod tests {
         let errs = r["errors"].as_array().unwrap();
         assert!(errs.iter().any(|e| e["niche"] == "scan-test"), "{r}");
         assert!(run("topics", json!({"niche": "scan-test"})).is_err());
+    }
+
+    #[test]
+    fn an_agent_sets_the_shortlist_and_a_topic_becomes_a_project() {
+        let t = setup();
+        run("niche_add", json!({"name": "Pick test"})).unwrap();
+        let e = run("topics_set", json!({"niche": "pick-test", "topics": []})).unwrap_err();
+        assert!(e.contains("no scan of pick-test"), "{e}");
+        let file = store::home().join("scans/pick-test/2026-11-25.json");
+        let scan = json!({
+            "niche": "pick-test", "day": "2026-11-25", "at": "2026-11-25T07:30:00Z",
+            "feeds": [], "error": "the command failed",
+            "items": [{"link": "https://a.example/1", "feed": "https://a.example/feed", "title": "One"}],
+        });
+        store::write_json(&file, &scan).unwrap();
+        let topics = json!([
+            {"title": "First idea", "why": "Because.", "items": ["https://a.example/1"]},
+            {"title": "Second idea"},
+        ]);
+        let r = run(
+            "topics_set",
+            json!({"niche": "Pick test", "topics": topics}),
+        )
+        .unwrap();
+        assert_eq!(r["shortlist_by"], "agent");
+        assert!(r.get("error").is_none(), "{r}");
+        assert_eq!(r["topics"][1]["id"], "2");
+        // A link that isn't in the scan refuses the whole list and changes nothing.
+        let bad = json!([{"title": "X", "items": ["https://elsewhere.example/"]}]);
+        let e = run("topics_set", json!({"niche": "pick-test", "topics": bad})).unwrap_err();
+        assert!(e.contains("not a link from this scan"), "{e}");
+        assert!(run("topics_set", json!({"niche": "pick-test", "topics": ["x"]})).is_err());
+
+        let dir = t.path().join("first-idea");
+        let r = run(
+            "topic_pick",
+            json!({"niche": "pick-test", "topic": "1", "dir": dir}),
+        )
+        .unwrap();
+        assert_eq!(r["title"], "First idea");
+        assert_eq!(r["niche"], "pick-test");
+        assert_eq!(r["workflow"], "explainer");
+        assert_eq!(r["topic"]["items"][0], "https://a.example/1");
+        let dir = canonical(&dir).unwrap();
+        assert!(store::read_config().unwrap().projects.contains(&dir));
+        assert!(dir.join("research").is_dir());
+        let e = run(
+            "topic_pick",
+            json!({"niche": "pick-test", "topic": "1", "dir": t.path().join("again")}),
+        )
+        .unwrap_err();
+        assert!(e.contains("already the project"), "{e}");
+        let e = run(
+            "topic_pick",
+            json!({"niche": "pick-test", "topic": "9", "dir": t.path().join("nine")}),
+        )
+        .unwrap_err();
+        assert!(e.contains("no topic \"9\""), "{e}");
+
+        // A new shortlist keeps the picked topic and numbers after it.
+        let r = run(
+            "topics_set",
+            json!({"niche": "pick-test", "day": "2026-11-25", "topics": [{"title": "Third"}]}),
+        )
+        .unwrap();
+        let t = r["topics"].as_array().unwrap();
+        assert_eq!(t.len(), 2);
+        assert_eq!(
+            (t[0]["id"].as_str(), t[0]["project"].as_str()),
+            (Some("1"), dir.to_str())
+        );
+        assert_eq!(t[1]["id"], "2");
+        let back: scan::Scan = store::read_json(&file).unwrap();
+        assert_eq!(back.topics.len(), 2);
     }
 
     #[test]

@@ -123,7 +123,7 @@ erDiagram
         string id PK
         string title
         string why
-        string state
+        string project FK
     }
     PROJECT {
         string path PK

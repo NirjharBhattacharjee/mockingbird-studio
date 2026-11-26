@@ -38,6 +38,7 @@ fn schema(op: &ops::Op) -> Map<String, Value> {
                 ArgKind::Number => json!({"type": "number"}),
                 ArgKind::Integer => json!({"type": "integer", "minimum": 0}),
                 ArgKind::TextList => json!({"type": "array", "items": {"type": "string"}}),
+                ArgKind::Objects => json!({"type": "array", "items": {"type": "object"}}),
             };
             p["description"] = a.help.into();
             (a.name.to_string(), p)

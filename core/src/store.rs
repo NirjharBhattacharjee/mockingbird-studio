@@ -155,6 +155,20 @@ pub fn update_config<R>(f: impl FnOnce(&mut Config) -> Result<R>) -> Result<R> {
     })
 }
 
+/// Reads the JSON file at `path`, changes it with `f` and writes it back,
+/// under the lock.
+pub(crate) fn update_json<T: Serialize + DeserializeOwned, R>(
+    path: &Path,
+    f: impl FnOnce(&mut T) -> Result<R>,
+) -> Result<R> {
+    locked(path, || {
+        let mut value = read_json(path)?;
+        let r = f(&mut value)?;
+        write_json(path, &value)?;
+        Ok(r)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
