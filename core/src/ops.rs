@@ -102,13 +102,13 @@ pub const OPS: &[Op] = &[
     },
     Op {
         name: "projects",
-        help: "Every listed project with each step's state.",
+        help: "Every listed project with each step's state, whether it can be worked on now, and who has claimed it.",
         args: &[],
         run: projects,
     },
     Op {
         name: "status",
-        help: "A project's steps, states, outputs, the last decision on each step, and open notes.",
+        help: "A project's steps, states, outputs, the last decision on each step, and open notes. ready lists the steps that can be worked on now and nobody has claimed.",
         args: &[PROJECT],
         run: status,
     },
@@ -135,6 +135,26 @@ pub const OPS: &[Op] = &[
             ),
         ],
         run: submit,
+    },
+    Op {
+        name: "claim",
+        help: "Claim a step you're about to work on, so another agent picks a different one. Refused under the same rule as submit, or when someone else holds it. Advisory: doesn't stop submit or job_start by others; submit clears it.",
+        args: &[
+            PROJECT,
+            STEP,
+            req(
+                "by",
+                Text,
+                "Who is working on it: your pane or session's name.",
+            ),
+        ],
+        run: claim,
+    },
+    Op {
+        name: "unclaim",
+        help: "Let go of a step without submitting, such as one claimed by a session that has gone.",
+        args: &[PROJECT, STEP],
+        run: unclaim,
     },
     Op {
         name: "notes",
@@ -630,7 +650,7 @@ fn projects(_: &Args, _: Via) -> Result<Value> {
             Ok(p) => json!({
                 "project": dir,
                 "title": p.title,
-                "steps": p.steps.iter().map(|s| json!({"id": s.id, "state": s.state})).collect::<Vec<_>>(),
+                "steps": p.steps.iter().map(|s| json!({"id": s.id, "state": s.state, "ready": p.ready(&s.id), "claim": s.claim})).collect::<Vec<_>>(),
             }),
             Err(e) => json!({"project": dir, "error": e}),
         }
@@ -650,8 +670,15 @@ pub(crate) fn status_of(dir: &Path) -> Result<Value> {
         .map(|s| {
             let mut v = json!(s);
             v["last_decision"] = json!(p.last_decision(&s.id).filter(|d| d.round == s.round));
+            v["ready"] = p.ready(&s.id).into();
             v
         })
+        .collect();
+    let ready: Vec<&str> = p
+        .steps
+        .iter()
+        .filter(|s| s.claim.is_none() && p.ready(&s.id))
+        .map(|s| s.id.as_str())
         .collect();
     let open: Vec<_> = p
         .notes
@@ -668,6 +695,7 @@ pub(crate) fn status_of(dir: &Path) -> Result<Value> {
         "workflow": p.workflow,
         "created": p.created,
         "steps": steps,
+        "ready": ready,
         "open_notes": open,
         "jobs": jobs,
         "upload": upload,
@@ -785,6 +813,26 @@ fn add_segments(dir: &Path, outputs: &mut [Output], json: &str) -> Result<()> {
         o.rest.insert("segments".into(), v);
     }
     Ok(())
+}
+
+fn claim(a: &Args, via: Via) -> Result<Value> {
+    let step = a.text("step");
+    store::update_project(&a.project()?, |p| {
+        Ok(json!(p.claim(
+            &step,
+            &a.text("by"),
+            via,
+            Timestamp::now()
+        )?))
+    })
+}
+
+fn unclaim(a: &Args, _: Via) -> Result<Value> {
+    let step = a.text("step");
+    store::update_project(&a.project()?, |p| {
+        p.unclaim(&step)?;
+        Ok(json!(p.step(&step)?))
+    })
 }
 
 fn notes(a: &Args, _: Via) -> Result<Value> {
@@ -1008,6 +1056,8 @@ mod tests {
                 "projects",
                 "status",
                 "submit",
+                "claim",
+                "unclaim",
                 "notes",
                 "note_add",
                 "note_done",
@@ -1570,6 +1620,43 @@ mod tests {
         assert_eq!(status["steps"][0]["last_decision"]["decision"], "approved");
         let n = run("notes", p(json!({}))).unwrap();
         assert_eq!(n, json!({"notes": [], "redo": []}));
+    }
+
+    #[test]
+    fn status_lists_ready_steps_and_claims_take_them_off() {
+        let t = setup();
+        let dir = new_project(t.path(), "side-by-side");
+        let ready = || run("status", json!({"project": dir})).unwrap()["ready"].clone();
+        assert_eq!(ready(), json!(["research"]));
+        let c = run(
+            "claim",
+            json!({"project": dir, "step": "research", "by": "pane 3"}),
+        )
+        .unwrap();
+        assert_eq!(c["by"], "pane 3");
+        assert_eq!(ready(), json!([]));
+        let err = run(
+            "claim",
+            json!({"project": dir, "step": "research", "by": "pane 4"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("claimed by pane 3"), "{err}");
+        let listed = run("projects", json!({})).unwrap();
+        let mine = listed["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["project"].as_str().unwrap().ends_with("/side-by-side"))
+            .unwrap();
+        assert_eq!(
+            (
+                mine["steps"][0]["ready"].clone(),
+                mine["steps"][0]["claim"]["by"].clone()
+            ),
+            (json!(true), json!("pane 3"))
+        );
+        run("unclaim", json!({"project": dir, "step": "research"})).unwrap();
+        assert_eq!(ready(), json!(["research"]));
     }
 
     #[test]

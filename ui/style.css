@@ -48,6 +48,7 @@ button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent);
   background: none;
   padding: 2px 8px;
 }
+#projects .who { margin-left: 6px; font-size: 11px; color: var(--soft); }
 #projects ul button[aria-current] { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 #projects .review { font-weight: 600; }
 #projects .todo { color: var(--soft); }

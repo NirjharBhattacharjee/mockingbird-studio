@@ -93,7 +93,9 @@ function drawProjects() {
     const steps = el("ul");
     for (const s of p.steps ?? []) {
       const b = el("button", `${s.id} ${GLYPH[s.state]}`, { type: "button", class: s.state });
-      b.setAttribute("aria-label", `${s.id}, ${SAYS[s.state]}`);
+      const who = claimText(s);
+      if (who) b.append(el("span", who, { class: "who" }));
+      b.setAttribute("aria-label", [s.id, SAYS[s.state], who].filter(Boolean).join(", "));
       if (p.project === sel.project && s.id === sel.step) b.setAttribute("aria-current", "true");
       b.onclick = () => {
         Object.assign(sel, { project: p.project, step: s.id, file: null });
@@ -109,15 +111,23 @@ function drawProjects() {
   }
 }
 
+// Who has claimed a step, or that it can be worked on now and nobody has.
+function claimText(s) {
+  if (s.claim) return `claimed by ${s.claim.by} (${s.claim.via})`;
+  return s.ready ? "ready" : "";
+}
+
 function drawStep() {
   const s = step();
   const inReview = s?.state === "review";
   $("approve").disabled = $("redo").disabled = !inReview;
+  $("unclaim").hidden = !s?.claim;
   $("heading").textContent = s ? `${s.id} · round ${s.round} · ${SAYS[s.state]}` : "Pick a step";
 
   const d = s?.last_decision;
   const said = d && `${d.decision} via ${d.via}, ${new Date(d.at).toLocaleString()}${d.note ? `: ${d.note}` : ""}`;
-  $("decision").textContent = [s?.summary, said].filter(Boolean).join(" · ");
+  const who = s?.claim ? `${claimText(s)} since ${new Date(s.claim.at).toLocaleString()}` : s?.ready ? "ready: nobody has claimed it" : "";
+  $("decision").textContent = [who, s?.summary, said].filter(Boolean).join(" · ");
 
   const files = $("files");
   files.replaceChildren();
@@ -136,6 +146,16 @@ function drawStep() {
 }
 
 // The upload step: what goes up and where, then what Google did with it.
+// For a claim left by a session that has gone.
+$("unclaim").onclick = async () => {
+  try {
+    await op("unclaim", { project: sel.project, step: sel.step });
+    await refresh();
+  } catch (e) {
+    showError(e);
+  }
+};
+
 function drawUpload(s) {
   const u = s?.id === "upload" ? status?.upload : null;
   const box = $("upload");
