@@ -1,5 +1,6 @@
 //! `project.toml`, schema 1: the types and the rules for changing them.
-//! Nothing here touches the disk; `store` reads and writes.
+//! Nothing here touches the disk but loading a workflow template; `store`
+//! reads and writes.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -219,39 +220,17 @@ fn time<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Timestamp, D::Er
     text.parse().map_err(serde::de::Error::custom)
 }
 
-/// The built-in `explainer` workflow: (step, gate, after).
-pub const EXPLAINER: &[(&str, bool, &[&str])] = &[
-    ("research", true, &[]),
-    ("script", true, &["research"]),
-    ("voice", true, &["script"]),
-    ("look", true, &["script"]),
-    ("sound", true, &["voice"]),
-    ("assets", false, &["script"]),
-    ("previews", true, &["voice", "look", "assets"]),
-    ("shorts", true, &["previews"]),
-    ("film", true, &["previews", "sound"]),
-    ("thumbnail", true, &["look"]),
-    ("description", true, &["film"]),
-    ("upload", true, &["film", "thumbnail", "description"]),
-];
-
 impl Project {
     pub fn new(title: &str, niche: Option<String>, workflow: &str, now: Timestamp) -> Result<Self> {
         if title.trim().is_empty() {
             return Err("a project needs a title".into());
         }
-        // ponytail: one built-in workflow; templates from files come in M5.
-        if workflow != "explainer" {
-            return Err(format!(
-                "unknown workflow {workflow:?}; M1 has only \"explainer\""
-            ));
-        }
-        let steps = EXPLAINER
-            .iter()
-            .map(|(id, gate, after)| Step {
-                id: id.to_string(),
-                gate: *gate,
-                after: after.iter().map(|s| s.to_string()).collect(),
+        let steps = crate::workflow::load(workflow)?
+            .into_iter()
+            .map(|t| Step {
+                id: t.id,
+                gate: t.gate,
+                after: t.after,
                 state: State::Todo,
                 round: 0,
                 summary: None,
